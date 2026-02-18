@@ -16,6 +16,7 @@ from pagevault.crypto import (
     _unwrap_key,
     _wrap_key,
     content_hash,
+    content_hash_bytes,
     decrypt,
     decrypt_chunked,
     encrypt,
@@ -23,10 +24,12 @@ from pagevault.crypto import (
     generate_salt,
     hex_to_salt,
     inspect_payload,
+    inspect_payload_v3,
     pad_content,
     rewrap_keys,
     salt_to_hex,
     verify_password,
+    verify_password_v3,
 )
 
 
@@ -881,3 +884,69 @@ class TestChunkedEncryption:
         iv_base = b"\x00" * 12
         with pytest.raises(PagevaultError, match="exceeds"):
             _derive_chunk_iv(iv_base, 2**32)
+
+
+class TestContentHashBytes:
+    """Tests for content_hash_bytes (raw bytes variant)."""
+
+    def test_hash_length(self):
+        result = content_hash_bytes(b"test content")
+        assert len(result) == 32
+        assert all(c in "0123456789abcdef" for c in result)
+
+    def test_deterministic(self):
+        data = b"Hello, world!"
+        assert content_hash_bytes(data) == content_hash_bytes(data)
+
+    def test_different_data(self):
+        assert content_hash_bytes(b"A") != content_hash_bytes(b"B")
+
+    def test_empty_bytes(self):
+        result = content_hash_bytes(b"")
+        assert len(result) == 32
+        assert result == "e3b0c44298fc1c149afbf4c8996fb924"
+
+    def test_matches_string_variant_for_utf8(self):
+        """For UTF-8 encodable strings, both hash functions agree."""
+        text = "Hello World"
+        assert content_hash(text) == content_hash_bytes(text.encode("utf-8"))
+
+
+class TestInspectPayloadV3:
+    """Tests for inspect_payload_v3 with v3 chunked payloads."""
+
+    def test_inspect_v3(self):
+        data = b"x" * 100
+        envelope, _ = encrypt_chunked(data, password="pw")
+        info = inspect_payload_v3(envelope)
+        assert info["version"] == 3
+        assert info["algorithm"] == "aes-256-gcm"
+        assert info["chunk_count"] == 1
+        assert info["chunk_size"] == CHUNK_SIZE
+        assert info["total_size"] == 100
+        assert info["key_count"] == 1
+
+    def test_inspect_v3_multiuser(self):
+        data = b"test"
+        users = {"alice": "pw-a", "bob": "pw-b"}
+        envelope, _ = encrypt_chunked(data, users=users)
+        info = inspect_payload_v3(envelope)
+        assert info["key_count"] == 2
+
+
+class TestVerifyPasswordV3:
+    """Tests for verify_password_v3 with chunked payloads."""
+
+    def test_correct_password(self):
+        envelope, _ = encrypt_chunked(b"secret", password="correct")
+        assert verify_password_v3(envelope, "correct") is True
+
+    def test_wrong_password(self):
+        envelope, _ = encrypt_chunked(b"secret", password="correct")
+        assert verify_password_v3(envelope, "wrong") is False
+
+    def test_multiuser(self):
+        envelope, _ = encrypt_chunked(b"shared", users={"alice": "pw-a", "bob": "pw-b"})
+        assert verify_password_v3(envelope, "pw-a", username="alice") is True
+        assert verify_password_v3(envelope, "pw-b", username="bob") is True
+        assert verify_password_v3(envelope, "pw-a", username="bob") is False

@@ -580,6 +580,19 @@ def content_hash(content: str) -> str:
     return digest[:HASH_LENGTH].hex()
 
 
+def content_hash_bytes(data: bytes) -> str:
+    """Compute truncated SHA-256 hash of raw bytes.
+
+    Args:
+        data: Raw bytes to hash.
+
+    Returns:
+        Hex string of first 16 bytes of SHA-256 digest (32 hex chars).
+    """
+    digest = hashlib.sha256(data).digest()
+    return digest[:HASH_LENGTH].hex()
+
+
 # ---------------------------------------------------------------------------
 # v3 chunked encryption
 # ---------------------------------------------------------------------------
@@ -808,3 +821,65 @@ def decrypt_chunked(
             f"Data length mismatch: expected {total_size}, got {len(result)}"
         )
     return result, meta
+
+
+def inspect_payload_v3(envelope: dict) -> dict[str, Any]:
+    """Inspect a v3 chunked envelope dict without decrypting.
+
+    Args:
+        envelope: The parsed JSON from a pv-meta script tag.
+
+    Returns:
+        Dict with version, algorithm, kdf, iterations, key_count,
+        chunk_size, chunk_count, total_size.
+    """
+    return {
+        "version": envelope.get("v"),
+        "algorithm": envelope.get("alg", "unknown"),
+        "kdf": envelope.get("kdf", "unknown"),
+        "iterations": envelope.get("iter", 0),
+        "key_count": len(envelope.get("keys", [])),
+        "chunk_size": envelope.get("chunk_size", 0),
+        "chunk_count": envelope.get("chunk_count", 0),
+        "total_size": envelope.get("total_size", 0),
+    }
+
+
+def verify_password_v3(
+    envelope: dict,
+    password: str,
+    username: str | None = None,
+) -> bool:
+    """Verify password against a v3 envelope (key unwrap only, fast).
+
+    Args:
+        envelope: The parsed JSON from a pv-meta script tag.
+        password: Password to verify.
+        username: Optional username for multi-user.
+
+    Returns:
+        True if password successfully unwraps at least one key blob.
+
+    Raises:
+        PagevaultError: If envelope is not v3 or has invalid salt.
+    """
+    if envelope.get("v") != VERSION_V3:
+        raise PagevaultError(f"Expected v3, got v{envelope.get('v')}")
+
+    try:
+        salt = bytes.fromhex(envelope["salt"])
+    except (ValueError, KeyError) as e:
+        raise PagevaultError(f"Invalid salt: {e}") from e
+
+    secret = _build_secret(password, username)
+    wrapping_key = _derive_key(secret, salt)
+
+    for key_blob in envelope.get("keys", []):
+        try:
+            blob_iv = base64.b64decode(key_blob["iv"])
+            blob_ct = base64.b64decode(key_blob["ct"])
+        except Exception:
+            continue
+        if _unwrap_key(blob_iv, blob_ct, wrapping_key) is not None:
+            return True
+    return False
