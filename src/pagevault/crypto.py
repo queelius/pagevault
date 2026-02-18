@@ -20,12 +20,14 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # Cryptographic parameters (must match browser-side implementation)
 VERSION = 2
+VERSION_V3 = 3
 ALGORITHM = "aes-256-gcm"
 KDF = "pbkdf2-sha256"
 ITERATIONS = 310000
 SALT_LENGTH = 16  # 128 bits
 IV_LENGTH = 12  # 96 bits (standard for GCM)
 KEY_LENGTH = 32  # 256 bits
+CHUNK_SIZE = 1_048_576  # 1 MB default chunk size for v3 format
 
 
 class PagevaultError(Exception):
@@ -576,3 +578,233 @@ def content_hash(content: str) -> str:
     """
     digest = hashlib.sha256(content.encode("utf-8")).digest()
     return digest[:HASH_LENGTH].hex()
+
+
+# ---------------------------------------------------------------------------
+# v3 chunked encryption
+# ---------------------------------------------------------------------------
+
+
+def _derive_chunk_iv(iv_base: bytes, chunk_index: int) -> bytes:
+    """Derive chunk IV by XORing chunk index into last 4 bytes of base IV.
+
+    The chunk index is encoded as a 4-byte big-endian integer and XORed
+    into bytes 8-11 of the 12-byte base IV.  Chunk 0 returns the base IV
+    unchanged (XOR with 0 is identity).
+
+    Args:
+        iv_base: 12-byte base IV.
+        chunk_index: Zero-based chunk index.
+
+    Returns:
+        12-byte derived IV for this chunk.
+    """
+    if chunk_index >= 2**32:
+        raise PagevaultError(f"Chunk index {chunk_index} exceeds 2^32 IV counter space")
+    iv = bytearray(iv_base)
+    iv[8] ^= (chunk_index >> 24) & 0xFF
+    iv[9] ^= (chunk_index >> 16) & 0xFF
+    iv[10] ^= (chunk_index >> 8) & 0xFF
+    iv[11] ^= chunk_index & 0xFF
+    return bytes(iv)
+
+
+def encrypt_chunked(
+    data: bytes,
+    password: str | None = None,
+    salt: bytes | None = None,
+    users: dict[str, str] | None = None,
+    meta: dict | None = None,
+    chunk_size: int = CHUNK_SIZE,
+) -> tuple[dict, list[str]]:
+    """Encrypt raw bytes using v3 chunked format.
+
+    Data is split into fixed-size chunks, each encrypted with AES-256-GCM
+    using a counter-derived IV.  Metadata is encrypted separately.  The
+    content encryption key (CEK) is wrapped per-user identically to v2.
+
+    Args:
+        data: Raw bytes to encrypt.
+        password: Single password (no username) for key derivation.
+        salt: Optional 16-byte salt.  If None, generates random.
+        users: Dict of {username: password} for multi-user encryption.
+        meta: Optional metadata dict to encrypt alongside content.
+        chunk_size: Bytes per chunk (default 1 MB).
+
+    Returns:
+        Tuple of (envelope_dict, list_of_base64_chunk_ciphertexts).
+
+    Raises:
+        PagevaultError: On invalid arguments.
+    """
+    if password is not None and users is not None:
+        raise PagevaultError("Cannot specify both 'password' and 'users'")
+    if password is None and users is None:
+        raise PagevaultError("Must specify either 'password' or 'users'")
+    if users is not None and len(users) == 0:
+        raise PagevaultError("'users' dict must not be empty")
+
+    if chunk_size <= 0:
+        raise PagevaultError(f"chunk_size must be positive, got {chunk_size}")
+
+    # Salt
+    if salt is None:
+        salt = os.urandom(SALT_LENGTH)
+    elif len(salt) != SALT_LENGTH:
+        raise PagevaultError(f"Salt must be {SALT_LENGTH} bytes")
+
+    # Random CEK and base IV
+    cek = os.urandom(KEY_LENGTH)
+    iv_base = os.urandom(IV_LENGTH)
+
+    # Wrap CEK for each user/password
+    keys: list[dict[str, str]] = []
+    if users:
+        for username, user_password in users.items():
+            secret = _build_secret(user_password, username)
+            wrapping_key = _derive_key(secret, salt)
+            wrap_iv, wrap_ct = _wrap_key(cek, wrapping_key)
+            keys.append(
+                {
+                    "iv": base64.b64encode(wrap_iv).decode("ascii"),
+                    "ct": base64.b64encode(wrap_ct).decode("ascii"),
+                }
+            )
+    else:
+        secret = _build_secret(password)
+        wrapping_key = _derive_key(secret, salt)
+        wrap_iv, wrap_ct = _wrap_key(cek, wrapping_key)
+        keys.append(
+            {
+                "iv": base64.b64encode(wrap_iv).decode("ascii"),
+                "ct": base64.b64encode(wrap_ct).decode("ascii"),
+            }
+        )
+
+    aesgcm = AESGCM(cek)
+
+    # Encrypt metadata
+    meta_iv = os.urandom(IV_LENGTH)
+    meta_json = json.dumps(meta or {}).encode("utf-8")
+    meta_ct = aesgcm.encrypt(meta_iv, meta_json, None)
+
+    # Encrypt data chunks
+    chunk_b64_list: list[str] = []
+    total_size = len(data)
+
+    if total_size > 0:
+        for i in range(0, total_size, chunk_size):
+            chunk_data = data[i : i + chunk_size]
+            chunk_iv = _derive_chunk_iv(iv_base, i // chunk_size)
+            chunk_ct = aesgcm.encrypt(chunk_iv, chunk_data, None)
+            chunk_b64_list.append(base64.b64encode(chunk_ct).decode("ascii"))
+
+    chunk_count = len(chunk_b64_list)
+    if chunk_count >= 2**32:
+        raise PagevaultError("Too many chunks: exceeds 2^32 IV counter space")
+
+    envelope = {
+        "v": VERSION_V3,
+        "alg": ALGORITHM,
+        "kdf": KDF,
+        "iter": ITERATIONS,
+        "salt": salt.hex(),
+        "keys": keys,
+        "iv_base": base64.b64encode(iv_base).decode("ascii"),
+        "chunk_size": chunk_size,
+        "chunk_count": chunk_count,
+        "total_size": total_size,
+        "meta_iv": base64.b64encode(meta_iv).decode("ascii"),
+        "meta_ct": base64.b64encode(meta_ct).decode("ascii"),
+    }
+
+    return envelope, chunk_b64_list
+
+
+def decrypt_chunked(
+    envelope: dict,
+    chunks: list[str],
+    password: str,
+    username: str | None = None,
+) -> tuple[bytes, dict]:
+    """Decrypt v3 chunked payload.
+
+    Recovers the CEK via key unwrapping, decrypts metadata, then decrypts
+    each chunk using counter-derived IVs and concatenates the results.
+
+    Args:
+        envelope: The v3 envelope dict from encrypt_chunked().
+        chunks: List of base64-encoded chunk ciphertexts.
+        password: The password used for encryption.
+        username: Optional username for multi-user content.
+
+    Returns:
+        Tuple of (decrypted_bytes, metadata_dict).
+
+    Raises:
+        PagevaultError: If decryption fails.
+    """
+    if envelope.get("v") != VERSION_V3:
+        raise PagevaultError(f"Expected v3, got v{envelope.get('v')}")
+
+    try:
+        salt = bytes.fromhex(envelope["salt"])
+    except (ValueError, KeyError) as e:
+        raise PagevaultError(f"Invalid salt in envelope: {e}") from e
+
+    secret = _build_secret(password, username)
+    wrapping_key = _derive_key(secret, salt)
+
+    # Try each key blob to unwrap CEK
+    cek = None
+    for key_blob in envelope.get("keys", []):
+        try:
+            blob_iv = base64.b64decode(key_blob["iv"])
+            blob_ct = base64.b64decode(key_blob["ct"])
+        except Exception:
+            continue
+        result = _unwrap_key(blob_iv, blob_ct, wrapping_key)
+        if result is not None:
+            cek = result
+            break
+
+    if cek is None:
+        raise PagevaultError("Decryption failed: wrong password or tampered ciphertext")
+
+    aesgcm = AESGCM(cek)
+
+    # Decrypt metadata
+    try:
+        meta_iv = base64.b64decode(envelope["meta_iv"])
+        meta_ct = base64.b64decode(envelope["meta_ct"])
+        meta_bytes = aesgcm.decrypt(meta_iv, meta_ct, None)
+        meta = json.loads(meta_bytes.decode("utf-8"))
+    except Exception as e:
+        raise PagevaultError(f"Failed to decrypt metadata: {e}") from e
+
+    try:
+        iv_base = base64.b64decode(envelope["iv_base"])
+        total_size = envelope["total_size"]
+    except (KeyError, Exception) as e:
+        raise PagevaultError(f"Missing required envelope field: {e}") from e
+
+    if total_size == 0:
+        return b"", meta
+
+    # Decrypt each chunk
+    parts: list[bytes] = []
+    for i, chunk_b64 in enumerate(chunks):
+        chunk_iv = _derive_chunk_iv(iv_base, i)
+        try:
+            chunk_ct = base64.b64decode(chunk_b64)
+            chunk_data = aesgcm.decrypt(chunk_iv, chunk_ct, None)
+        except Exception as e:
+            raise PagevaultError(f"Failed to decrypt chunk {i}: {e}") from e
+        parts.append(chunk_data)
+
+    result = b"".join(parts)
+    if len(result) != total_size:
+        raise PagevaultError(
+            f"Data length mismatch: expected {total_size}, got {len(result)}"
+        )
+    return result, meta
