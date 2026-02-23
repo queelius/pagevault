@@ -469,6 +469,23 @@ def pad_content(plaintext: str) -> str:
     return (raw_bytes + padding).decode("utf-8", errors="replace")
 
 
+def pad_content_bytes(data: bytes) -> bytes:
+    """Pad raw bytes to next power-of-2 length.
+
+    Args:
+        data: Raw bytes to pad.
+
+    Returns:
+        Padded bytes (with null bytes appended).
+    """
+    if len(data) == 0:
+        return data
+    target = 1
+    while target < len(data):
+        target *= 2
+    return data + b"\x00" * (target - len(data))
+
+
 def inspect_payload(encrypted_payload: str) -> dict[str, Any]:
     """Inspect an encrypted payload without decrypting.
 

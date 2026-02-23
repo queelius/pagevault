@@ -60,7 +60,7 @@ class TestWrapFile:
     """Tests for wrap_file function."""
 
     def test_basic_wrap(self, tmp_path):
-        """Test wrapping a simple text file."""
+        """Test wrapping a simple text file produces v3 output."""
         # Create test file
         test_file = tmp_path / "test.txt"
         test_file.write_text("Hello, World!")
@@ -71,9 +71,11 @@ class TestWrapFile:
         assert output.suffix == ".html"
 
         content = output.read_text()
-        assert "data-encrypted=" in content
-        assert 'data-wrap-type="file"' in content
-        assert 'data-filename="test.txt"' in content
+        soup = BeautifulSoup(content, "html.parser")
+        # v3: envelope in pv-meta, not data-encrypted attribute
+        assert soup.find("script", {"id": "pv-meta"}) is not None
+        pv = soup.find("pagevault")
+        assert pv.get("data-pv-chunked") == "true"
         assert "Protected: test.txt" in content
 
     def test_wrap_with_custom_output(self, tmp_path):
@@ -89,6 +91,8 @@ class TestWrapFile:
 
     def test_wrap_binary_file(self, tmp_path):
         """Test wrapping a binary file (e.g., PNG header)."""
+        import json
+
         test_file = tmp_path / "image.png"
         # Write a minimal PNG-like binary
         test_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -97,8 +101,10 @@ class TestWrapFile:
         assert output.exists()
 
         content = output.read_text()
-        assert 'data-wrap-type="file"' in content
-        assert 'data-filename="image.png"' in content
+        soup = BeautifulSoup(content, "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        assert envelope["v"] == 3
+        assert "Protected: image.png" in content
 
     def test_wrap_pdf(self, tmp_path):
         """Test wrapping a PDF file."""
@@ -108,27 +114,39 @@ class TestWrapFile:
         output = wrap_file(test_file, password="password")
 
         content = output.read_text()
-        assert 'data-wrap-type="file"' in content
+        soup = BeautifulSoup(content, "html.parser")
+        assert soup.find("script", {"id": "pv-meta"}) is not None
+        assert soup.find("pagevault").get("data-pv-chunked") == "true"
 
     def test_encrypted_payload_is_decryptable(self, tmp_path):
-        """Test that the encrypted payload can be decrypted."""
+        """Test that the v3 encrypted payload can be decrypted."""
+        import json
+
+        from pagevault.crypto import decrypt_chunked
+
         test_file = tmp_path / "secret.txt"
         test_file.write_text("Secret data!")
 
         output = wrap_file(test_file, password="test-pw")
         content = output.read_text()
 
-        # Extract encrypted payload
+        # Extract v3 envelope and chunks
         soup = BeautifulSoup(content, "html.parser")
-        elem = soup.find("pagevault")
-        encrypted = elem["data-encrypted"]
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
 
         # Decrypt
-        plaintext, meta = decrypt(encrypted, "test-pw")
+        data, meta = decrypt_chunked(envelope, chunks, "test-pw")
 
-        # The plaintext should be the base64-encoded file content
-        decoded = base64.b64decode(plaintext)
-        assert decoded == b"Secret data!"
+        # The data should be the raw file bytes (no base64 layer in v3)
+        assert data == b"Secret data!"
 
         # Meta should have file info
         assert meta["type"] == "file"
@@ -142,17 +160,26 @@ class TestWrapFile:
             wrap_file(tmp_path / "nonexistent.txt", password="pw")
 
     def test_wrap_with_content_hash(self, tmp_path):
-        """Test that content hash is included."""
+        """Test that content hash is included in v3 envelope."""
+        import json
+
         test_file = tmp_path / "test.txt"
         test_file.write_text("Hash test")
 
         output = wrap_file(test_file, password="pw")
         content = output.read_text()
 
-        assert "data-content-hash=" in content
+        soup = BeautifulSoup(content, "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        assert "content_hash" in envelope
+        assert len(envelope["content_hash"]) == 32
 
     def test_wrap_multiuser(self, tmp_path):
         """Test wrapping with multi-user encryption."""
+        import json
+
+        from pagevault.crypto import decrypt_chunked
+
         test_file = tmp_path / "shared.txt"
         test_file.write_text("Shared secret")
 
@@ -164,15 +191,23 @@ class TestWrapFile:
         content = output.read_text()
         assert 'data-mode="user"' in content
 
-        # Both users should be able to decrypt
+        # Extract v3 envelope and chunks
         soup = BeautifulSoup(content, "html.parser")
-        elem = soup.find("pagevault")
-        encrypted = elem["data-encrypted"]
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
 
-        text_a, _ = decrypt(encrypted, "pw-a", username="alice")
-        text_b, _ = decrypt(encrypted, "pw-b", username="bob")
-        assert base64.b64decode(text_a) == b"Shared secret"
-        assert base64.b64decode(text_b) == b"Shared secret"
+        # Both users should be able to decrypt
+        data_a, _ = decrypt_chunked(envelope, chunks, "pw-a", username="alice")
+        data_b, _ = decrypt_chunked(envelope, chunks, "pw-b", username="bob")
+        assert data_a == b"Shared secret"
+        assert data_b == b"Shared secret"
 
     def test_html_is_self_contained(self, tmp_path):
         """Test output HTML contains all needed runtime."""
@@ -196,19 +231,30 @@ class TestWrapFile:
 
     def test_wrap_large_file(self, tmp_path):
         """Test wrapping a larger file."""
+        import json
+
+        from pagevault.crypto import decrypt_chunked
+
         test_file = tmp_path / "large.bin"
         test_file.write_bytes(b"x" * 100000)
 
         output = wrap_file(test_file, password="pw")
         assert output.exists()
 
-        # Verify decryptability
+        # Verify decryptability via v3 chunked
         soup = BeautifulSoup(output.read_text(), "html.parser")
-        elem = soup.find("pagevault")
-        encrypted = elem["data-encrypted"]
-        plaintext, meta = decrypt(encrypted, "pw")
-        decoded = base64.b64decode(plaintext)
-        assert decoded == b"x" * 100000
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        data, meta = decrypt_chunked(envelope, chunks, "pw")
+        assert data == b"x" * 100000
 
     def test_wrap_unicode_filename(self, tmp_path):
         """Test wrapping a file with unicode in the name."""
@@ -833,6 +879,105 @@ class TestSiteResourceStringRewriting:
         assert "media/a.png" in meta["files"]
         assert "media/b.jpg" in meta["files"]
         assert "media/c.gif" in meta["files"]
+
+
+class TestWrapFileV3:
+    """Tests for wrap_file using v3 chunked format."""
+
+    def test_basic_wrap_produces_chunk_tags(self, tmp_path):
+        """wrap_file output has per-chunk script tags, not data-encrypted."""
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("Hello, World!")
+
+        output = wrap_file(test_file, password="password")
+        content = output.read_text()
+
+        soup = BeautifulSoup(content, "html.parser")
+        assert soup.find("script", {"id": "pv-meta"}) is not None
+        assert soup.find("script", {"id": "pv-0"}) is not None
+        pv = soup.find("pagevault")
+        assert pv is not None
+        assert not pv.has_attr("data-encrypted")
+        assert pv.get("data-pv-chunked") == "true"
+
+    def test_roundtrip_via_python_decrypt(self, tmp_path):
+        """wrap_file output can be decrypted by Python (parse envelope + chunks)."""
+        import json
+
+        test_file = tmp_path / "secret.txt"
+        test_file.write_text("Secret data!")
+
+        output = wrap_file(test_file, password="test-pw")
+        content = output.read_text()
+
+        soup = BeautifulSoup(content, "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        from pagevault.crypto import decrypt_chunked
+
+        data, meta = decrypt_chunked(envelope, chunks, "test-pw")
+        assert data == b"Secret data!"
+        assert meta["filename"] == "secret.txt"
+        assert meta["mime"] == "text/plain"
+        assert meta["type"] == "file"
+
+    def test_binary_file_roundtrip(self, tmp_path):
+        """Binary file survives wrap+decrypt roundtrip byte-for-byte."""
+        import json
+        import os
+
+        test_file = tmp_path / "image.png"
+        original_bytes = b"\x89PNG\r\n\x1a\n" + os.urandom(500)
+        test_file.write_bytes(original_bytes)
+
+        output = wrap_file(test_file, password="pw")
+
+        soup = BeautifulSoup(output.read_text(), "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        from pagevault.crypto import decrypt_chunked
+
+        data, meta = decrypt_chunked(envelope, chunks, "pw")
+        assert data == original_bytes
+        assert meta["mime"] == "image/png"
+
+    def test_content_hash_present(self, tmp_path):
+        """v3 envelope includes content_hash."""
+        import json
+
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("Hash me")
+
+        output = wrap_file(test_file, password="pw")
+        soup = BeautifulSoup(output.read_text(), "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        assert "content_hash" in envelope
+        assert len(envelope["content_hash"]) == 32
+
+    def test_title_shows_protected(self, tmp_path):
+        """HTML title says 'Protected: filename'."""
+        test_file = tmp_path / "report.pdf"
+        test_file.write_bytes(b"%PDF-1.4")
+
+        output = wrap_file(test_file, password="pw")
+        content = output.read_text()
+        assert "<title>Protected: report.pdf</title>" in content
 
 
 class TestRendererXssPrevention:

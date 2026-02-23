@@ -13,7 +13,15 @@ from io import BytesIO
 from pathlib import Path
 
 from .config import PagevaultConfig
-from .crypto import PagevaultError, content_hash, encrypt, pad_content
+from .crypto import (
+    PagevaultError,
+    content_hash,
+    content_hash_bytes,
+    encrypt,
+    encrypt_chunked,
+    pad_content,
+    pad_content_bytes,
+)
 from .viewers import discover_viewers, resolve_viewer
 
 logger = logging.getLogger(__name__)
@@ -87,9 +95,6 @@ def wrap_file(
     # Detect MIME type
     mime = detect_mime(file_path)
 
-    # Base64-encode file content
-    b64_data = base64.b64encode(file_bytes).decode("ascii")
-
     # Build metadata
     meta = {
         "type": "file",
@@ -101,21 +106,24 @@ def wrap_file(
     # Get salt from config
     salt = config.salt if config else None
 
-    # Compute content hash for integrity (before padding)
-    hash_value = content_hash(b64_data)
+    # Compute content hash for integrity (before padding, on raw bytes)
+    hash_value = content_hash_bytes(file_bytes)
 
-    # Apply content padding if requested
+    # Apply content padding if requested (pad raw bytes)
     use_pad = pad or (config and config.pad)
-    plaintext = pad_content(b64_data) if use_pad else b64_data
+    data_to_encrypt = pad_content_bytes(file_bytes) if use_pad else file_bytes
 
-    # Encrypt: the plaintext is the (optionally padded) base64-encoded file data
-    encrypted_payload = encrypt(
-        plaintext,
+    # Encrypt using v3 chunked format (raw bytes, no base64 layer)
+    envelope, chunks = encrypt_chunked(
+        data_to_encrypt,
         password=password,
         salt=salt,
         users=users,
         meta=meta,
     )
+
+    # Add content hash to envelope for integrity verification
+    envelope["content_hash"] = hash_value
 
     # Determine output path
     if output_path is None:
@@ -127,17 +135,15 @@ def wrap_file(
     matching_viewer = resolve_viewer(mime, viewers)
     viewer_deps = matching_viewer.dependencies() if matching_viewer else []
 
-    # Generate HTML
-    html = _generate_wrap_html(
-        encrypted_payload=encrypted_payload,
-        content_hash=hash_value,
-        wrap_type="file",
-        filename=file_path.name,
+    # Generate v3 HTML
+    html = _generate_wrap_html_v3(
+        envelope=envelope,
+        chunks=chunks,
         title=f"Protected: {file_path.name}",
-        config=config,
-        users=users,
         viewers=viewers,
         viewer_deps=viewer_deps,
+        config=config,
+        users=users,
     )
 
     # Write output
