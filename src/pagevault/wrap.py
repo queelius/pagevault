@@ -4,7 +4,6 @@ Wraps arbitrary files and directories into self-contained encrypted HTML
 that can be decrypted and rendered in the browser.
 """
 
-import base64
 import logging
 import mimetypes
 import re
@@ -15,11 +14,8 @@ from pathlib import Path
 from .config import PagevaultConfig
 from .crypto import (
     PagevaultError,
-    content_hash,
     content_hash_bytes,
-    encrypt,
     encrypt_chunked,
-    pad_content,
     pad_content_bytes,
 )
 from .viewers import discover_viewers, resolve_viewer
@@ -208,9 +204,7 @@ def wrap_site(
             f"Available files: {', '.join(file_list[:10])}"
         )
 
-    # Base64-encode the zip
     zip_bytes = zip_buffer.getvalue()
-    b64_data = base64.b64encode(zip_bytes).decode("ascii")
 
     # Build metadata
     meta = {
@@ -222,42 +216,43 @@ def wrap_site(
     # Get salt from config
     salt = config.salt if config else None
 
-    # Compute content hash (before padding)
-    hash_value = content_hash(b64_data)
+    # Compute content hash on raw bytes (before padding)
+    hash_value = content_hash_bytes(zip_bytes)
 
-    # Apply content padding if requested
+    # Apply content padding if requested (pad raw bytes)
     use_pad = pad or (config and config.pad)
-    plaintext = pad_content(b64_data) if use_pad else b64_data
+    data_to_encrypt = pad_content_bytes(zip_bytes) if use_pad else zip_bytes
 
-    # Encrypt
-    encrypted_payload = encrypt(
-        plaintext,
+    # Encrypt using v3 chunked format (raw bytes, no base64 layer)
+    envelope, chunks = encrypt_chunked(
+        data_to_encrypt,
         password=password,
         salt=salt,
         users=users,
         meta=meta,
     )
 
+    # Add content hash to envelope for integrity verification
+    envelope["content_hash"] = hash_value
+
     # Determine output path
     if output_path is None:
         output_path = dir_path.parent / f"{dir_path.name}.html"
 
-    # Generate HTML.
+    # Generate v3 HTML.
     # Site mode uses its own renderer (__pagevault_renderSite) that handles
     # all file types via data URIs inside the site iframe. Individual file
     # viewers are not needed — the site's own HTML/CSS/JS runs inside the
     # sandboxed iframe. Passing viewers=[] produces an empty dispatch table,
     # which is intentional: renderFile is only reached for non-site payloads.
-    html = _generate_wrap_html(
-        encrypted_payload=encrypted_payload,
-        content_hash=hash_value,
-        wrap_type="site",
-        filename=dir_path.name,
+    html = _generate_wrap_html_v3(
+        envelope=envelope,
+        chunks=chunks,
         title=f"Protected: {dir_path.name}",
-        entry=entry,
         config=config,
         users=users,
         include_jszip=True,
+        entry=entry,
     )
 
     # Write output

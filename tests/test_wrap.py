@@ -1,6 +1,5 @@
 """Tests for pagevault.wrap module."""
 
-import base64
 from pathlib import Path
 
 import pytest
@@ -9,7 +8,7 @@ from click.testing import CliRunner
 
 from pagevault.cli import main
 from pagevault.config import CONFIG_FILENAME
-from pagevault.crypto import PagevaultError, decrypt
+from pagevault.crypto import PagevaultError
 from pagevault.viewers import discover_viewers
 from pagevault.wrap import (
     _generate_wrap_html_v3,
@@ -273,6 +272,8 @@ class TestWrapSite:
 
     def test_basic_site_wrap(self, tmp_path):
         """Test wrapping a simple site directory."""
+        import json
+
         # Create a minimal site
         site_dir = tmp_path / "my-site"
         site_dir.mkdir()
@@ -285,9 +286,13 @@ class TestWrapSite:
         assert output.name == "my-site.html"
 
         content = output.read_text()
-        assert 'data-wrap-type="site"' in content
-        assert 'data-entry="index.html"' in content
-        assert "data-encrypted=" in content
+        soup = BeautifulSoup(content, "html.parser")
+        # v3: envelope in pv-meta, not data-encrypted
+        assert soup.find("script", {"id": "pv-meta"}) is not None
+        pv = soup.find("pagevault")
+        assert pv.get("data-pv-chunked") == "true"
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        assert envelope["v"] == 3
 
     def test_site_custom_output(self, tmp_path):
         """Test wrapping site with custom output path."""
@@ -303,6 +308,10 @@ class TestWrapSite:
 
     def test_site_custom_entry(self, tmp_path):
         """Test wrapping site with custom entry point."""
+        import json
+
+        from pagevault.crypto import decrypt_chunked
+
         site_dir = tmp_path / "site"
         site_dir.mkdir()
         (site_dir / "home.html").write_text("<html><body>Home</body></html>")
@@ -310,10 +319,28 @@ class TestWrapSite:
         output = wrap_site(site_dir, password="pw", entry="home.html")
 
         content = output.read_text()
-        assert 'data-entry="home.html"' in content
+        soup = BeautifulSoup(content, "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        _, meta = decrypt_chunked(envelope, chunks, "pw")
+        assert meta["entry"] == "home.html"
 
     def test_site_encrypted_payload_contains_zip(self, tmp_path):
         """Test encrypted payload contains a valid zip with all files."""
+        import json
+        import zipfile
+        from io import BytesIO
+
+        from pagevault.crypto import decrypt_chunked
+
         site_dir = tmp_path / "site"
         site_dir.mkdir()
         (site_dir / "index.html").write_text("<h1>Hello</h1>")
@@ -321,12 +348,19 @@ class TestWrapSite:
 
         output = wrap_site(site_dir, password="pw")
 
-        # Extract and decrypt
+        # Extract and decrypt via v3
         soup = BeautifulSoup(output.read_text(), "html.parser")
-        elem = soup.find("pagevault")
-        encrypted = elem["data-encrypted"]
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
 
-        plaintext, meta = decrypt(encrypted, "pw")
+        data, meta = decrypt_chunked(envelope, chunks, "pw")
 
         # Meta should list files
         assert meta["type"] == "site"
@@ -334,12 +368,8 @@ class TestWrapSite:
         assert "index.html" in meta["files"]
         assert "style.css" in meta["files"]
 
-        # Plaintext should be base64 zip
-        import zipfile
-        from io import BytesIO
-
-        zip_bytes = base64.b64decode(plaintext)
-        with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
+        # Data should be raw zip bytes (no base64 layer in v3)
+        with zipfile.ZipFile(BytesIO(data)) as zf:
             names = zf.namelist()
             assert "index.html" in names
             assert "style.css" in names
@@ -348,6 +378,10 @@ class TestWrapSite:
 
     def test_site_with_subdirectories(self, tmp_path):
         """Test wrapping site with nested directories."""
+        import json
+
+        from pagevault.crypto import decrypt_chunked
+
         site_dir = tmp_path / "site"
         site_dir.mkdir()
         (site_dir / "index.html").write_text("<html><body>Home</body></html>")
@@ -360,11 +394,19 @@ class TestWrapSite:
 
         output = wrap_site(site_dir, password="pw")
 
-        # Verify all files in metadata
+        # Verify all files in metadata via v3
         soup = BeautifulSoup(output.read_text(), "html.parser")
-        elem = soup.find("pagevault")
-        encrypted = elem["data-encrypted"]
-        _, meta = decrypt(encrypted, "pw")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        _, meta = decrypt_chunked(envelope, chunks, "pw")
 
         assert "index.html" in meta["files"]
         assert "images/logo.png" in meta["files"]
@@ -407,6 +449,10 @@ class TestWrapSite:
 
     def test_site_multiuser(self, tmp_path):
         """Test wrapping site with multi-user encryption."""
+        import json
+
+        from pagevault.crypto import decrypt_chunked
+
         site_dir = tmp_path / "site"
         site_dir.mkdir()
         (site_dir / "index.html").write_text("<html>Secret site</html>")
@@ -419,13 +465,20 @@ class TestWrapSite:
         content = output.read_text()
         assert 'data-mode="user"' in content
 
-        # Both users can decrypt
+        # Both users can decrypt via v3
         soup = BeautifulSoup(content, "html.parser")
-        elem = soup.find("pagevault")
-        encrypted = elem["data-encrypted"]
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
 
-        _, meta_a = decrypt(encrypted, "pw-a", username="alice")
-        _, meta_b = decrypt(encrypted, "pw-b", username="bob")
+        _, meta_a = decrypt_chunked(envelope, chunks, "pw-a", username="alice")
+        _, meta_b = decrypt_chunked(envelope, chunks, "pw-b", username="bob")
         assert meta_a["type"] == "site"
         assert meta_b["type"] == "site"
 
@@ -558,6 +611,10 @@ salt: "0123456789abcdef0123456789abcdef"
 
     def test_wrap_site_with_entry(self, runner, tmp_path, sample_config):
         """Test wrap site with custom entry point (now using lock --site)."""
+        import json
+
+        from pagevault.crypto import decrypt_chunked
+
         site_dir = tmp_path / "site"
         site_dir.mkdir()
         (site_dir / "home.html").write_text("<html><body>Home</body></html>")
@@ -585,8 +642,21 @@ salt: "0123456789abcdef0123456789abcdef"
         assert result.exit_code == 0
         assert output.exists()
 
+        # v3: entry is in encrypted metadata, verify via decrypt
         content = output.read_text()
-        assert 'data-entry="home.html"' in content
+        soup = BeautifulSoup(content, "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        _, meta = decrypt_chunked(envelope, chunks, "test-password")
+        assert meta["entry"] == "home.html"
 
     def test_wrap_site_missing_entry_fails(self, runner, tmp_path, sample_config):
         """Test wrap site fails when entry point doesn't exist."""
@@ -843,6 +913,10 @@ class TestSiteResourceStringRewriting:
     def test_site_with_dynamic_refs_wraps_successfully(self, tmp_path):
         """A site with dynamic JS image references should wrap without error
         and include all files in the zip payload."""
+        import json
+
+        from pagevault.crypto import decrypt_chunked
+
         site_dir = tmp_path / "site"
         site_dir.mkdir()
         media_dir = site_dir / "media"
@@ -869,11 +943,19 @@ class TestSiteResourceStringRewriting:
         output = wrap_site(site_dir, password="pw")
         assert output.exists()
 
-        # Verify all files are in the encrypted payload
+        # Verify all files are in the encrypted payload via v3
         soup = BeautifulSoup(output.read_text(), "html.parser")
-        elem = soup.find("pagevault")
-        encrypted = elem["data-encrypted"]
-        _, meta = decrypt(encrypted, "pw")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        _, meta = decrypt_chunked(envelope, chunks, "pw")
 
         assert "index.html" in meta["files"]
         assert "media/a.png" in meta["files"]
@@ -978,6 +1060,146 @@ class TestWrapFileV3:
         output = wrap_file(test_file, password="pw")
         content = output.read_text()
         assert "<title>Protected: report.pdf</title>" in content
+
+
+class TestWrapSiteV3:
+    """Tests for wrap_site using v3 chunked format."""
+
+    def test_site_produces_chunk_tags(self, tmp_path):
+        site_dir = tmp_path / "site"
+        site_dir.mkdir()
+        (site_dir / "index.html").write_text("<html><body>Hi</body></html>")
+
+        output = wrap_site(site_dir, password="pw")
+        soup = BeautifulSoup(output.read_text(), "html.parser")
+        assert soup.find("script", {"id": "pv-meta"}) is not None
+        assert soup.find("script", {"id": "pv-0"}) is not None
+        pv = soup.find("pagevault")
+        assert pv is not None
+        assert pv.get("data-pv-chunked") == "true"
+
+    def test_site_roundtrip(self, tmp_path):
+        site_dir = tmp_path / "site"
+        site_dir.mkdir()
+        (site_dir / "index.html").write_text("<h1>Hello</h1>")
+        (site_dir / "style.css").write_text("body { margin: 0; }")
+
+        output = wrap_site(site_dir, password="pw")
+        soup = BeautifulSoup(output.read_text(), "html.parser")
+
+        import json
+
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        from pagevault.crypto import decrypt_chunked
+
+        data, meta = decrypt_chunked(envelope, chunks, "pw")
+
+        assert meta["type"] == "site"
+        assert meta["entry"] == "index.html"
+        assert "index.html" in meta["files"]
+        assert "style.css" in meta["files"]
+
+        # Verify zip content
+        import zipfile
+        from io import BytesIO
+
+        with zipfile.ZipFile(BytesIO(data)) as zf:
+            assert zf.read("index.html") == b"<h1>Hello</h1>"
+
+    def test_site_includes_jszip_and_site_renderer(self, tmp_path):
+        site_dir = tmp_path / "site"
+        site_dir.mkdir()
+        (site_dir / "index.html").write_text("<html>Hi</html>")
+
+        output = wrap_site(site_dir, password="pw")
+        content = output.read_text()
+        assert "ZipReader" in content or "JSZip" in content
+
+    def test_site_v3_content_hash_in_envelope(self, tmp_path):
+        """Content hash should be in the v3 envelope, not a data attribute."""
+        import json
+
+        site_dir = tmp_path / "site"
+        site_dir.mkdir()
+        (site_dir / "index.html").write_text("<html>Test</html>")
+
+        output = wrap_site(site_dir, password="pw")
+        soup = BeautifulSoup(output.read_text(), "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        assert "content_hash" in envelope
+        assert len(envelope["content_hash"]) == 32
+
+    def test_site_v3_multiuser_roundtrip(self, tmp_path):
+        """Multi-user site wrap should decrypt for each user."""
+        import json
+
+        from pagevault.crypto import decrypt_chunked
+
+        site_dir = tmp_path / "site"
+        site_dir.mkdir()
+        (site_dir / "index.html").write_text("<html>Secret site</html>")
+
+        output = wrap_site(
+            site_dir,
+            users={"alice": "pw-a", "bob": "pw-b"},
+        )
+
+        content = output.read_text()
+        assert 'data-mode="user"' in content
+
+        soup = BeautifulSoup(content, "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        _, meta_a = decrypt_chunked(envelope, chunks, "pw-a", username="alice")
+        _, meta_b = decrypt_chunked(envelope, chunks, "pw-b", username="bob")
+        assert meta_a["type"] == "site"
+        assert meta_b["type"] == "site"
+
+    def test_site_v3_with_subdirectories(self, tmp_path):
+        """Subdirectories should be preserved in v3 zip payload."""
+        import json
+
+        from pagevault.crypto import decrypt_chunked
+
+        site_dir = tmp_path / "site"
+        site_dir.mkdir()
+        (site_dir / "index.html").write_text("<html>Home</html>")
+        images_dir = site_dir / "images"
+        images_dir.mkdir()
+        (images_dir / "logo.png").write_bytes(b"\x89PNG" + b"\x00" * 50)
+
+        output = wrap_site(site_dir, password="pw")
+        soup = BeautifulSoup(output.read_text(), "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        _, meta = decrypt_chunked(envelope, chunks, "pw")
+        assert "index.html" in meta["files"]
+        assert "images/logo.png" in meta["files"]
 
 
 class TestRendererXssPrevention:
