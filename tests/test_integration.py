@@ -5,6 +5,7 @@ Tests the full workflow from CLI to browser-compatible output.
 
 import base64
 import json
+import os
 
 import pytest
 from bs4 import BeautifulSoup
@@ -13,6 +14,7 @@ from click.testing import CliRunner
 from pagevault import encrypt
 from pagevault.cli import main
 from pagevault.config import PagevaultConfig, create_default_config, load_config
+from pagevault.crypto import CHUNK_SIZE, decrypt_chunked
 from pagevault.parser import (
     lock_html,
     mark_body,
@@ -565,3 +567,136 @@ class TestPadRoundtrip:
         for username, password in users.items():
             decrypted = unlock_html(encrypted, password, username=username)
             assert "Multi-user padded" in decrypted
+
+
+class TestV3WrapIntegration:
+    """End-to-end tests for v3 chunked wrap/unwrap."""
+
+    def test_wrap_file_cli_roundtrip(self, tmp_path):
+        """Lock a non-HTML file via CLI, verify output is v3."""
+        runner = CliRunner()
+        test_file = tmp_path / "report.pdf"
+        test_file.write_bytes(b"%PDF-1.4" + b"\x00" * 1000)
+
+        output = tmp_path / "report.html"
+        result = runner.invoke(
+            main, ["lock", str(test_file), "-p", "pw", "-o", str(output)]
+        )
+        assert result.exit_code == 0, result.output
+
+        # Verify v3 structure
+        content = output.read_text()
+        soup = BeautifulSoup(content, "html.parser")
+        meta_el = soup.find("script", {"id": "pv-meta"})
+        assert meta_el is not None
+
+        envelope = json.loads(meta_el.string)
+        assert envelope["v"] == 3
+
+    def test_wrap_site_cli_roundtrip(self, tmp_path):
+        """Lock --site via CLI, verify output is v3."""
+        runner = CliRunner()
+        site = tmp_path / "mysite"
+        site.mkdir()
+        (site / "index.html").write_text("<h1>Hello</h1>")
+
+        output = tmp_path / "site.html"
+        result = runner.invoke(
+            main,
+            ["lock", str(site), "--site", "-p", "pw", "-o", str(output)],
+        )
+        assert result.exit_code == 0, result.output
+
+        content = output.read_text()
+        soup = BeautifulSoup(content, "html.parser")
+        meta_el = soup.find("script", {"id": "pv-meta"})
+        assert meta_el is not None
+
+        envelope = json.loads(meta_el.string)
+        assert envelope["v"] == 3
+
+    def test_region_encryption_still_v2(self, tmp_path):
+        """HTML region encryption (parser.py) still uses v2."""
+        html = "<pagevault>Secret content</pagevault>"
+        encrypted = lock_html(html, "password")
+
+        soup = BeautifulSoup(encrypted, "html.parser")
+        pv = soup.find("pagevault")
+        assert pv.has_attr("data-encrypted")
+
+        # Verify it's v2
+        payload = json.loads(base64.b64decode(pv["data-encrypted"]))
+        assert payload["v"] == 2
+
+    def test_multi_chunk_file(self, tmp_path):
+        """File larger than chunk_size produces multiple chunks."""
+        test_file = tmp_path / "big.bin"
+        test_file.write_bytes(os.urandom(CHUNK_SIZE * 2 + 100))
+
+        output = tmp_path / "big.html"
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["lock", str(test_file), "-p", "pw", "-o", str(output)]
+        )
+        assert result.exit_code == 0, result.output
+
+        soup = BeautifulSoup(output.read_text(), "html.parser")
+        # Should have 3 chunks
+        assert soup.find("script", {"id": "pv-0"}) is not None
+        assert soup.find("script", {"id": "pv-1"}) is not None
+        assert soup.find("script", {"id": "pv-2"}) is not None
+        assert soup.find("script", {"id": "pv-3"}) is None
+
+    def test_wrap_file_decrypt_roundtrip(self, tmp_path):
+        """Full roundtrip: wrap file via CLI, parse HTML, decrypt_chunked."""
+        runner = CliRunner()
+        test_file = tmp_path / "data.bin"
+        original = os.urandom(2048)
+        test_file.write_bytes(original)
+
+        output = tmp_path / "data.html"
+        result = runner.invoke(
+            main, ["lock", str(test_file), "-p", "pw", "-o", str(output)]
+        )
+        assert result.exit_code == 0, result.output
+
+        # Parse and decrypt
+        soup = BeautifulSoup(output.read_text(), "html.parser")
+        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+        chunks = []
+        i = 0
+        while True:
+            el = soup.find("script", {"id": f"pv-{i}"})
+            if not el:
+                break
+            chunks.append(el.string.strip())
+            i += 1
+
+        data, meta = decrypt_chunked(envelope, chunks, "pw")
+        assert data == original
+        assert meta["type"] == "file"
+
+    def test_info_then_check_v3(self, tmp_path):
+        """Info and check commands both work on v3 files."""
+        runner = CliRunner()
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("Hello!")
+        output = tmp_path / "test.html"
+
+        result = runner.invoke(
+            main, ["lock", str(test_file), "-p", "pw", "-o", str(output)]
+        )
+        assert result.exit_code == 0, result.output
+
+        # Info
+        result = runner.invoke(main, ["info", str(output)])
+        assert result.exit_code == 0, result.output
+        assert "v3" in result.output
+
+        # Check correct password
+        result = runner.invoke(main, ["check", str(output), "-p", "pw"])
+        assert "correct" in result.output.lower()
+
+        # Check wrong password
+        result = runner.invoke(main, ["check", str(output), "-p", "wrong"])
+        assert "incorrect" in result.output.lower()
