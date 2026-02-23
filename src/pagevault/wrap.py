@@ -826,6 +826,455 @@ def _get_renderer_js(viewers: list) -> str:  # noqa: E501
 }})();"""
 
 
+def _get_progress_css() -> str:
+    """Generate CSS for the v3 chunk-decryption progress bar."""
+    return """
+/* pagevault progress bar */
+.pagevault-progress {
+  width: 100%;
+  background: #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 1rem 0;
+  height: 24px;
+}
+.pagevault-progress-bar {
+  height: 100%;
+  background: var(--pv-color-primary, #4a6fa5);
+  transition: width 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+"""
+
+
+def _generate_wrap_html_v3(  # noqa: E501
+    envelope: dict,
+    chunks: list[str],
+    title: str,
+    viewers: list | None = None,
+    viewer_deps: list[str] | None = None,
+    config: PagevaultConfig | None = None,
+    users: dict[str, str] | None = None,
+    include_jszip: bool = False,
+    entry: str | None = None,
+) -> str:
+    """Generate self-contained HTML with v3 chunked encrypted payload.
+
+    Instead of a single ``data-encrypted`` attribute, v3 stores the
+    envelope as JSON in a ``<script id="pv-meta">`` tag and each
+    encrypted chunk in its own ``<script id="pv-N" type="x-pv">`` tag.
+    This avoids the HTML attribute size limit for large payloads and
+    allows the browser to free each chunk element after decryption.
+
+    Args:
+        envelope: JSON-serializable envelope dict (v, chunk_count, keys, salt, etc.).
+        chunks: List of base64-encoded encrypted chunk strings.
+        title: HTML page title.
+        viewers: Active ViewerPlugin instances for the dispatch table.
+        viewer_deps: JS dependency contents to bundle (from matching viewer).
+        config: Optional configuration.
+        users: Multi-user dict (affects data-mode attribute).
+        include_jszip: Whether to include JSZip library for site mode.
+        entry: Entry point for site mode.
+
+    Returns:
+        Complete HTML string.
+    """
+    import json as _json
+
+    from .config import TemplateConfig
+
+    template = config.template if config else TemplateConfig()
+
+    # Serialize envelope as JSON for the meta script tag
+    envelope_json = _json.dumps(envelope)
+
+    # Build chunk script tags
+    chunk_tags = "\n".join(
+        f'<script id="pv-{i}" type="x-pv">{chunk}</script>'
+        for i, chunk in enumerate(chunks)
+    )
+
+    # Build pagevault element attributes
+    pv_attrs = ['data-pv-chunked="true"']
+    if users:
+        pv_attrs.append('data-mode="user"')
+    pv_attrs_str = " ".join(pv_attrs)
+
+    # Compose CSS: framework + active viewer styles + progress bar.
+    # Viewer CSS is escaped to prevent </style> breakout.
+    framework_css = _get_wrap_css(template)
+    viewer_css = "\n".join(
+        _escape_for_script_block(v.css()) for v in (viewers or []) if v.css()
+    )
+    progress_css = _get_progress_css()
+    css = framework_css + viewer_css + progress_css
+
+    crypto_js = _get_crypto_js_v3()
+    renderer_js = _get_renderer_js_v3(viewers or [])
+
+    jszip_block = ""
+    site_js = ""
+    if include_jszip:
+        jszip_block = f"\n<script data-pagevault-runtime>{_get_jszip_shim()}</script>"
+        site_js = _get_site_renderer_js()
+
+    # Include viewer dependencies (e.g. marked.js for markdown).
+    # Dependencies are escaped to prevent </script> breakout.
+    dep_blocks = "".join(
+        f"\n<script data-pagevault-runtime>{_escape_for_script_block(dep)}</script>"
+        for dep in (viewer_deps or [])
+    )
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{_html_escape(title)}</title>
+  <style data-pagevault-runtime>{css}</style>
+</head>
+<body>
+<script id="pv-meta" type="application/json">{envelope_json}</script>
+{chunk_tags}
+  <pagevault {pv_attrs_str}></pagevault>{jszip_block}{dep_blocks}
+  <script data-pagevault-runtime>
+{crypto_js}
+
+{renderer_js}
+
+{site_js}
+  </script>
+</body>
+</html>"""
+
+
+def _get_crypto_js_v3() -> str:  # noqa: E501
+    """Generate the v3 chunked crypto JS for wrap payloads.
+
+    Key differences from v2 ``_get_crypto_js()``:
+    - Salt is hex-encoded (not base64).
+    - CEK is unwrapped from the envelope's ``keys`` array.
+    - Metadata is encrypted separately (``meta_iv`` / ``meta_ct``).
+    - Chunks use per-chunk IVs derived from ``iv_base`` XOR'd with chunk index.
+    - Each chunk's DOM element is removed after reading to free memory.
+    - Returns ``{blob, meta}`` (raw Blob) instead of ``{content, meta}`` (base64 string).
+    """
+    return """
+// pagevault v3 chunked crypto runtime
+(function() {
+  'use strict';
+
+  function hexToBytes(hex) {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+    }
+    return bytes;
+  }
+
+  function b64ToBytes(b64) {
+    const raw = atob(b64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    return bytes;
+  }
+
+  function deriveChunkIv(ivBase, chunkIndex) {
+    const iv = new Uint8Array(ivBase);
+    iv[8]  ^= (chunkIndex >>> 24) & 0xFF;
+    iv[9]  ^= (chunkIndex >>> 16) & 0xFF;
+    iv[10] ^= (chunkIndex >>> 8)  & 0xFF;
+    iv[11] ^=  chunkIndex         & 0xFF;
+    return iv;
+  }
+
+  async function deriveKey(secret, salt) {
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw', enc.encode(secret), 'PBKDF2', false, ['deriveBits', 'deriveKey']
+    );
+    return crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: salt, iterations: 310000, hash: 'SHA-256' },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['decrypt']
+    );
+  }
+
+  async function decryptV3Chunked(envelope, password, username, onProgress) {
+    try {
+      const salt = hexToBytes(envelope.salt);
+      const secret = username ? username + ':' + password : password;
+      const wrappingKey = await deriveKey(secret, salt);
+
+      // Unwrap CEK — try each key blob until one succeeds
+      let cekRaw = null;
+      for (const keyBlob of envelope.keys) {
+        const blobIv = b64ToBytes(keyBlob.iv);
+        const blobCt = b64ToBytes(keyBlob.ct);
+        try {
+          cekRaw = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: blobIv }, wrappingKey, blobCt
+          );
+          break;
+        } catch (e) { continue; }
+      }
+      if (!cekRaw) throw new Error('No matching key found \\u2014 wrong password?');
+
+      const cek = await crypto.subtle.importKey(
+        'raw', cekRaw, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+      );
+
+      // Decrypt metadata
+      const metaIv = b64ToBytes(envelope.meta_iv);
+      const metaCt = b64ToBytes(envelope.meta_ct);
+      const metaPlain = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: metaIv }, cek, metaCt
+      );
+      const meta = JSON.parse(new TextDecoder().decode(metaPlain));
+
+      // Decrypt chunks — read each DOM element, then remove it to free memory
+      const ivBase = b64ToBytes(envelope.iv_base);
+      const parts = [];
+      for (let i = 0; i < envelope.chunk_count; i++) {
+        const el = document.getElementById('pv-' + i);
+        if (!el) throw new Error('Missing chunk element pv-' + i);
+        const b64 = el.textContent;
+        el.remove();
+        const ct = b64ToBytes(b64);
+        const chunkIv = deriveChunkIv(ivBase, i);
+        const plain = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: chunkIv }, cek, ct
+        );
+        parts.push(new Uint8Array(plain));
+        if (onProgress) onProgress(i + 1, envelope.chunk_count);
+      }
+
+      const blob = new Blob(parts, { type: meta.mime || 'application/octet-stream' });
+      return { blob: blob, meta: meta };
+    } catch (e) {
+      console.error('v3 decryption failed:', e);
+      return null;
+    }
+  }
+
+  window.__pagevault = window.__pagevault || {};
+  window.__pagevault.decryptV3Chunked = decryptV3Chunked;
+})();"""
+
+
+def _get_renderer_js_v3(viewers: list) -> str:  # noqa: E501
+    """Generate the v3 file renderer JS with viewer dispatch table and progress bar.
+
+    Reads the envelope from ``<script id="pv-meta">``, uses
+    ``decryptV3Chunked`` (from ``_get_crypto_js_v3``), and shows a
+    progress bar during chunk decryption. After decryption, dispatches
+    to the appropriate viewer or download fallback.
+
+    Security notes:
+    - Self-contained IIFE with its own ``escapeHtml()`` (can't share between IIFEs).
+    - Viewer name/MIME: validated against strict regex before injection into JS.
+    - Viewer js() output: escaped via ``_escape_for_script_block()`` to prevent
+      ``</script>`` breakout.
+    """
+    # Build viewer variable definitions and dispatch table entries.
+    viewer_defs_parts = []
+    dispatch_entries = []
+
+    for viewer in viewers:
+        # Defense-in-depth: re-validate at injection boundary.
+        if not _SAFE_NAME_RE.match(viewer.name):
+            logger.warning("Skipping viewer with unsafe name: %r", viewer.name)
+            continue
+        for mt in viewer.mime_types:
+            if not _SAFE_MIME_RE.match(mt):
+                logger.warning(
+                    "Skipping viewer %r: unsafe MIME type %r",
+                    viewer.name,
+                    mt,
+                )
+                break
+        else:
+            var_name = "__pv_" + viewer.name
+            safe_js = _escape_for_script_block(viewer.js())
+            viewer_defs_parts.append("  var " + var_name + " = " + safe_js + ";")
+            for mime_type in viewer.mime_types:
+                dispatch_entries.append("    '" + mime_type + "': " + var_name)
+
+    viewer_defs = "\n\n".join(viewer_defs_parts)
+    dispatch_table = ",\n".join(dispatch_entries)
+
+    return f"""
+// pagevault v3 chunked renderer
+(function() {{
+  'use strict';
+
+  var pvEl = document.querySelector('pagevault[data-pv-chunked]');
+  if (!pvEl) return;
+
+  var isUserMode = pvEl.getAttribute('data-mode') === 'user';
+
+  // Read envelope from pv-meta script tag
+  var metaScript = document.getElementById('pv-meta');
+  if (!metaScript) return;
+  var envelope;
+  try {{
+    envelope = JSON.parse(metaScript.textContent);
+  }} catch (e) {{
+    pvEl.innerHTML = '<div class="pagevault-error">Invalid envelope metadata</div>';
+    return;
+  }}
+
+  // Render password prompt
+  pvEl.innerHTML = '<div class="pagevault-container">' +
+    '<div class="pagevault-icon">\\u{{1F512}}</div>' +
+    '<div class="pagevault-title">Protected Content</div>' +
+    '<form class="pagevault-form">' +
+    (isUserMode ? '<input type="text" class="pagevault-input" placeholder="Username" autocomplete="username">' : '') +
+    '<input type="password" class="pagevault-input pagevault-password" placeholder="Password" autocomplete="current-password">' +
+    '<button type="submit" class="pagevault-button">Decrypt</button>' +
+    '<div class="pagevault-error" style="display: none;"></div>' +
+    '</form></div>';
+
+  var form = pvEl.querySelector('form');
+  var pwdInput = pvEl.querySelector('.pagevault-password');
+  var userInput = pvEl.querySelector('input[placeholder="Username"]');
+  var errorDiv = pvEl.querySelector('.pagevault-error');
+  var button = pvEl.querySelector('button');
+
+  form.addEventListener('submit', async function(e) {{
+    e.preventDefault();
+    var password = pwdInput.value;
+    if (!password) return;
+    var username = userInput ? userInput.value : null;
+
+    button.disabled = true;
+    button.textContent = 'Decrypting...';
+    errorDiv.style.display = 'none';
+
+    // Show progress bar for multi-chunk payloads
+    var progressContainer = null;
+    var progressBar = null;
+    if (envelope.chunk_count > 1) {{
+      progressContainer = document.createElement('div');
+      progressContainer.className = 'pagevault-progress';
+      progressBar = document.createElement('div');
+      progressBar.className = 'pagevault-progress-bar';
+      progressBar.style.width = '0%';
+      progressContainer.appendChild(progressBar);
+      pvEl.querySelector('.pagevault-container').appendChild(progressContainer);
+    }}
+
+    function onProgress(done, total) {{
+      if (progressBar) {{
+        var pct = Math.round((done / total) * 100);
+        progressBar.style.width = pct + '%';
+        progressBar.textContent = pct + '%';
+      }}
+    }}
+
+    var result = await window.__pagevault.decryptV3Chunked(envelope, password, username, onProgress);
+    if (!result) {{
+      if (progressContainer) progressContainer.remove();
+      errorDiv.textContent = 'Wrong password';
+      errorDiv.style.display = 'block';
+      button.disabled = false;
+      button.textContent = 'Decrypt';
+      pwdInput.value = '';
+      pwdInput.focus();
+      return;
+    }}
+
+    var meta = result.meta || {{}};
+    pvEl.setAttribute('data-decrypted', 'true');
+
+    if (meta.type === 'site' && window.__pagevault_renderSite) {{
+      var ab = await result.blob.arrayBuffer();
+      window.__pagevault_renderSite(pvEl, new Uint8Array(ab), meta);
+    }} else {{
+      await renderFile(pvEl, result.blob, meta);
+    }}
+  }});
+
+  setTimeout(function() {{ pwdInput.focus(); }}, 100);
+
+  function escapeHtml(str) {{
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }}
+
+  function formatSize(bytes) {{
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  }}
+
+  function createToolbar(fname, size, downloadUrl) {{
+    var toolbar = document.createElement('div');
+    toolbar.className = 'pagevault-toolbar';
+    toolbar.innerHTML =
+      '<span class="toolbar-filename">' + escapeHtml(fname) + '</span>' +
+      '<span class="toolbar-size">' + formatSize(size) + '</span>' +
+      '<a class="toolbar-btn" href="' + downloadUrl + '" download="' + escapeHtml(fname) + '">Download</a>';
+    return toolbar;
+  }}
+
+  function renderDownloadView(viewer, url, fname, size) {{
+    viewer.innerHTML =
+      '<div class="pagevault-download">' +
+        '<div class="pagevault-icon">\\u{{1F4C4}}</div>' +
+        '<a href="' + url + '" download="' + escapeHtml(fname) + '">Download ' + escapeHtml(fname) + '</a>' +
+        '<div class="file-info">' + formatSize(size) + '</div>' +
+      '</div>';
+  }}
+
+  // --- Viewer plugins (injected from ViewerPlugin.js()) ---
+
+{viewer_defs}
+
+  // Dispatch table: MIME type/pattern -> viewer function
+  var __pv_viewers = {{
+{dispatch_table}
+  }};
+
+  function __pv_resolveViewer(mime) {{
+    if (__pv_viewers[mime]) return __pv_viewers[mime];
+    var prefix = mime.split('/')[0] + '/*';
+    if (__pv_viewers[prefix]) return __pv_viewers[prefix];
+    return null;
+  }}
+
+  async function renderFile(container, blob, meta) {{
+    var mime = meta.mime || 'application/octet-stream';
+    var fname = meta.filename || 'download';
+    var size = meta.size || blob.size;
+    var url = URL.createObjectURL(blob);
+
+    var toolbar = createToolbar(fname, size, url);
+    var viewer = document.createElement('div');
+    viewer.className = 'pagevault-viewer';
+
+    var renderFn = __pv_resolveViewer(mime);
+    if (renderFn) {{
+      await renderFn(viewer, blob, url, meta, toolbar);
+    }} else {{
+      renderDownloadView(viewer, url, fname, size);
+    }}
+
+    container.innerHTML = '';
+    container.appendChild(toolbar);
+    container.appendChild(viewer);
+  }}
+}})();"""
+
+
 def _get_jszip_shim() -> str:
     """Get a minimal JSZip-compatible implementation for site mode.
 

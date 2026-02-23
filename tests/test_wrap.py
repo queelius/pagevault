@@ -12,6 +12,7 @@ from pagevault.config import CONFIG_FILENAME
 from pagevault.crypto import PagevaultError, decrypt
 from pagevault.viewers import discover_viewers
 from pagevault.wrap import (
+    _generate_wrap_html_v3,
     _get_renderer_js,
     _get_site_renderer_js,
     _get_wrap_css,
@@ -863,3 +864,200 @@ class TestRendererXssPrevention:
         """Test _get_site_renderer_js() defines its own escapeHtml."""
         js = _get_site_renderer_js()
         assert "function escapeHtml" in js
+
+
+class TestGenerateWrapHtmlV3:
+    """Tests for v3 chunked HTML template generation."""
+
+    def test_has_pv_meta_script(self):
+        """Output HTML contains a pv-meta script tag with JSON envelope."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 1, "keys": []},
+            chunks=["AAAA"],
+            title="Protected: test.txt",
+            viewers=[],
+        )
+        soup = BeautifulSoup(html, "html.parser")
+        meta_script = soup.find("script", {"id": "pv-meta"})
+        assert meta_script is not None
+        assert meta_script.get("type") == "application/json"
+
+    def test_pv_meta_contains_envelope_json(self):
+        """The pv-meta script tag contains the envelope as valid JSON."""
+        import json
+
+        envelope = {"v": 3, "chunk_count": 2, "keys": [{"iv": "abc", "ct": "def"}]}
+        html = _generate_wrap_html_v3(
+            envelope=envelope,
+            chunks=["chunk0", "chunk1"],
+            title="Protected: test",
+            viewers=[],
+        )
+        soup = BeautifulSoup(html, "html.parser")
+        meta_script = soup.find("script", {"id": "pv-meta"})
+        parsed = json.loads(meta_script.string)
+        assert parsed == envelope
+
+    def test_has_chunk_script_tags(self):
+        """Each chunk gets its own script element with id pv-N."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 3, "keys": []},
+            chunks=["chunk0", "chunk1", "chunk2"],
+            title="Protected: file",
+            viewers=[],
+        )
+        soup = BeautifulSoup(html, "html.parser")
+        for i in range(3):
+            el = soup.find("script", {"id": f"pv-{i}"})
+            assert el is not None
+            assert el.get("type") == "x-pv"
+            assert el.string.strip() == f"chunk{i}"
+
+    def test_has_pagevault_element(self):
+        """Output has a <pagevault> element for the password prompt."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 0, "keys": []},
+            chunks=[],
+            title="Protected: test",
+            viewers=[],
+        )
+        soup = BeautifulSoup(html, "html.parser")
+        pv = soup.find("pagevault")
+        assert pv is not None
+        assert pv.get("data-pv-chunked") == "true"
+
+    def test_has_runtime_scripts(self):
+        """Output includes crypto and renderer runtime scripts."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 1, "keys": []},
+            chunks=["AAAA"],
+            title="Protected: test.txt",
+            viewers=[],
+        )
+        assert "decryptV3Chunked" in html
+        assert "crypto.subtle" in html
+        assert "PBKDF2" in html
+
+    def test_has_progress_bar(self):
+        """Output includes progress bar CSS and JS."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 1, "keys": []},
+            chunks=["AAAA"],
+            title="Protected: test",
+            viewers=[],
+        )
+        assert "pagevault-progress" in html
+
+    def test_title_escaped(self):
+        """Title with HTML special chars is escaped."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 0, "keys": []},
+            chunks=[],
+            title='Protected: <script>alert("xss")</script>',
+            viewers=[],
+        )
+        assert "<script>alert" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_no_data_encrypted_attribute(self):
+        """v3 does NOT use data-encrypted attribute (chunks are in script tags)."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 1, "keys": []},
+            chunks=["AAAA"],
+            title="Protected: test",
+            viewers=[],
+        )
+        assert 'data-encrypted="' not in html
+
+    def test_zero_chunks(self):
+        """Template with zero chunks should still have pv-meta and pagevault element."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 0, "keys": []},
+            chunks=[],
+            title="Protected: empty",
+            viewers=[],
+        )
+        soup = BeautifulSoup(html, "html.parser")
+        assert soup.find("script", {"id": "pv-meta"}) is not None
+        assert soup.find("pagevault") is not None
+        # No chunk script tags
+        assert soup.find("script", {"id": "pv-0"}) is None
+
+    def test_user_mode_attribute(self):
+        """When users dict is provided, pagevault element has data-mode='user'."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 0, "keys": []},
+            chunks=[],
+            title="Protected: test",
+            viewers=[],
+            users={"alice": "pw-a"},
+        )
+        soup = BeautifulSoup(html, "html.parser")
+        pv = soup.find("pagevault")
+        assert pv.get("data-mode") == "user"
+
+    def test_includes_framework_css(self):
+        """Output includes framework CSS (pagevault-container, etc)."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 0, "keys": []},
+            chunks=[],
+            title="Protected: test",
+            viewers=[],
+        )
+        assert ".pagevault-container" in html
+        assert ".pagevault-button" in html
+
+    def test_site_mode_includes_jszip(self):
+        """When include_jszip is True, output includes JSZip shim and site renderer."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 1, "keys": []},
+            chunks=["AAAA"],
+            title="Protected: site",
+            viewers=[],
+            include_jszip=True,
+        )
+        assert "ZipReader" in html
+        assert "__pagevault_renderSite" in html
+
+    def test_renderer_has_escapehtml(self):
+        """The v3 renderer IIFE must define its own escapeHtml."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 0, "keys": []},
+            chunks=[],
+            title="Protected: test",
+            viewers=[],
+        )
+        assert "function escapeHtml" in html
+
+    def test_crypto_js_v3_hex_to_bytes(self):
+        """The v3 crypto JS must use hexToBytes (v3 salt is hex, not base64)."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 0, "keys": []},
+            chunks=[],
+            title="Protected: test",
+            viewers=[],
+        )
+        assert "hexToBytes" in html
+
+    def test_crypto_js_v3_derive_chunk_iv(self):
+        """The v3 crypto JS must use deriveChunkIv for per-chunk IVs."""
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 0, "keys": []},
+            chunks=[],
+            title="Protected: test",
+            viewers=[],
+        )
+        assert "deriveChunkIv" in html
+
+    def test_viewer_dispatch_table(self):
+        """v3 renderer includes viewer dispatch table when viewers given."""
+        viewers = discover_viewers()
+        html = _generate_wrap_html_v3(
+            envelope={"v": 3, "chunk_count": 1, "keys": []},
+            chunks=["AAAA"],
+            title="Protected: test.png",
+            viewers=viewers,
+        )
+        assert "__pv_resolveViewer" in html
+        assert "__pv_viewers" in html
+        assert "__pv_image" in html
