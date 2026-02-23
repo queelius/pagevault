@@ -1,5 +1,6 @@
 """Command-line interface for pagevault."""
 
+import sys
 from pathlib import Path
 
 import click
@@ -10,11 +11,14 @@ from .config import (
     CONFIG_FILENAME,
     config_to_dict,
     create_default_config,
+    create_global_config,
     find_config_file,
+    get_global_config_path,
     load_config,
+    load_global_config,
     update_config_users,
 )
-from .crypto import PagevaultError
+from .crypto import PagevaultError, salt_to_hex
 from .parser import (
     has_pagevault_elements,
     mark_body,
@@ -153,7 +157,7 @@ def mark(
 
 # Helper functions for unified lock command
 def _determine_operation_mode(
-    paths: tuple, site_flag: bool, recursive: bool
+    paths: tuple, site_flag: bool, recursive: bool, wrap_flag: bool = False
 ) -> tuple[str, list[Path]]:
     """Determine operation mode: 'lock_html', 'wrap_file', or 'wrap_site'.
 
@@ -170,6 +174,22 @@ def _determine_operation_mode(
             if not path.is_dir():
                 raise click.UsageError("--site requires directory path(s), not files")
         return ("wrap_site", [Path(p) for p in paths])
+
+    if wrap_flag:
+        # --wrap: force file-wrapping for all files (including HTML)
+        all_files = []
+        for path_str in paths:
+            path = Path(path_str)
+            if path.is_file():
+                all_files.append(path)
+            elif path.is_dir():
+                raise click.UsageError(
+                    "--wrap requires files, not directories. "
+                    "Use --site for directories."
+                )
+        if not all_files:
+            raise click.UsageError("No files found to wrap")
+        return ("wrap_file", all_files)
 
     # Check file types
     html_files = []
@@ -210,6 +230,7 @@ def _validate_flags_for_mode(
     output_path: str | None,
     entry: str,
     recursive: bool,
+    wrap_flag: bool = False,
 ) -> None:
     """Validate flag compatibility with operation mode.
 
@@ -232,7 +253,7 @@ def _validate_flags_for_mode(
             raise click.UsageError(
                 "Selector/CSS flags only work with HTML files, not non-HTML files"
             )
-        if output_dir:
+        if not wrap_flag and output_dir:
             raise click.UsageError("Non-HTML wrap uses -o/--output, not -d/--directory")
 
     elif mode == "lock_html":
@@ -546,6 +567,11 @@ def _wrap_site_directory(
     is_flag=True,
     help="Pad content to power-of-2 boundary before encryption (prevents size leakage)",
 )
+@click.option(
+    "--wrap",
+    is_flag=True,
+    help="Force file-wrapping mode (encrypts entire file, including HTML head/title)",
+)
 def lock(
     paths,
     recursive,
@@ -563,6 +589,7 @@ def lock(
     site,
     entry,
     pad,
+    wrap,
 ):
     """Encrypt files into password-protected HTML.
 
@@ -570,6 +597,7 @@ def lock(
     For other files: wraps the entire file into self-contained encrypted HTML.
     For directories: processes all supported files individually.
     With --site: bundles entire directory into a single encrypted HTML site.
+    With --wrap: forces file-wrapping for HTML (encrypts everything).
 
     \b
     Examples:
@@ -579,13 +607,14 @@ def lock(
       pagevault lock mysite/ --site               # Bundle as encrypted site
       pagevault lock page.html -s "#secret"       # Encrypt only #secret element
       pagevault lock file.html -s "#admin" --title "Admin Panel" -p "admin-pw"
+      pagevault lock page.html --wrap             # Wrap entire HTML as opaque file
     """
     if not paths:
         raise click.UsageError("No files or directories specified")
 
     # 1. Determine operation mode
     try:
-        mode, target_paths = _determine_operation_mode(paths, site, recursive)
+        mode, target_paths = _determine_operation_mode(paths, site, recursive, wrap)
     except click.UsageError:
         raise
 
@@ -602,6 +631,7 @@ def lock(
             output_path,
             entry,
             recursive,
+            wrap_flag=wrap,
         )
     except click.UsageError:
         raise
@@ -657,17 +687,34 @@ def lock(
         click.echo(f"\n{processed} file(s) locked, {skipped} skipped")
 
     elif mode == "wrap_file":
-        # Non-HTML wrapping
-        for path in target_paths:
-            _wrap_single_file(
-                path,
-                config,
-                users,
-                pwd,
-                Path(output_path) if output_path else None,
-                dry_run,
-                pad=pad or config.pad,
-            )
+        # File wrapping (non-HTML, or HTML with --wrap)
+        if wrap and not output_path:
+            # --wrap mode: use -d directory logic (like lock_html)
+            if output_dir is None:
+                output_dir = "_locked"
+                click.echo(f"Writing to {output_dir}/ (use -d to change)")
+            output_base = Path(output_dir)
+            output_base.mkdir(parents=True, exist_ok=True)
+            for path in target_paths:
+                # HTML files keep their name; non-HTML get .html suffix
+                if path.suffix.lower() in {".html", ".htm"}:
+                    dest = output_base / path.name
+                else:
+                    dest = output_base / f"{path.name}.html"
+                _wrap_single_file(
+                    path, config, users, pwd, dest, dry_run, pad=pad or config.pad
+                )
+        else:
+            for path in target_paths:
+                _wrap_single_file(
+                    path,
+                    config,
+                    users,
+                    pwd,
+                    Path(output_path) if output_path else None,
+                    dry_run,
+                    pad=pad or config.pad,
+                )
 
     elif mode == "wrap_site":
         # Site wrapping
@@ -993,11 +1040,74 @@ def info(path):
     except Exception:
         soup = BeautifulSoup(content, "html.parser")
 
+    # Check for v3 chunked format (pv-meta script tag)
+    pv_meta_el = soup.find("script", {"id": "pv-meta"})
+    if pv_meta_el:
+        import json
+
+        from .crypto import inspect_payload_v3
+
+        try:
+            envelope = json.loads(pv_meta_el.string)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise click.ClickException(f"Invalid pv-meta JSON: {e}")
+
+        info_data = inspect_payload_v3(envelope)
+
+        click.echo(f"File: {_relative_path(file_path)}")
+        click.echo("Format:         v3 chunked")
+        click.echo(f"Version:        v{info_data['version']}")
+        click.echo(f"Algorithm:      {info_data['algorithm']}")
+        click.echo(f"KDF:            {info_data['kdf']}")
+        click.echo(f"Iterations:     {info_data['iterations']:,}")
+        click.echo(f"Key blobs:      {info_data['key_count']}")
+        click.echo(f"Chunk size:     {_format_size(info_data['chunk_size'])}")
+        click.echo(f"Chunks:         {info_data['chunk_count']}")
+        click.echo(f"Total size:     {_format_size(info_data['total_size'])}")
+
+        if "content_hash" in envelope:
+            click.echo(f"Content hash:   {envelope['content_hash']}")
+
+        # Count chunk script tags
+        chunk_count = 0
+        while soup.find("script", {"id": f"pv-{chunk_count}"}):
+            chunk_count += 1
+        click.echo(f"Chunk tags:     {chunk_count}")
+
+        # Check pagevault element for mode
+        pv_el = soup.find("pagevault")
+        if pv_el:
+            mode = pv_el.get("data-mode", "single")
+            click.echo(f"Mode:           {mode}")
+
+        # Runtime info (same as v2)
+        runtime_scripts = soup.find_all("script", {"data-pagevault-runtime": True})
+        runtime_styles = soup.find_all("style", {"data-pagevault-runtime": True})
+        click.echo(f"Runtime scripts: {len(runtime_scripts)}")
+        click.echo(f"Runtime styles:  {len(runtime_styles)}")
+
+        # Check for viewer dispatch table
+        viewer_re = r"'([a-z]+/[a-z0-9*+\-.]+)':\s*__pv_"
+        for script in runtime_scripts:
+            script_text = script.string or ""
+            viewer_matches = re.findall(viewer_re, script_text)
+            if viewer_matches:
+                click.echo(f"Viewers:         {', '.join(viewer_matches)}")
+
+        # Check for JSZip (site mode indicator)
+        jszip_present = any("ZipReader" in (s.string or "") for s in runtime_scripts)
+        if jszip_present:
+            click.echo("JSZip shim:      yes")
+
+        click.echo(f"pagevault:       v{__version__}")
+        return
+
+    # --- v2 region-encrypted format ---
     elements = soup.find_all("pagevault")
     encrypted_regions = [el for el in elements if el.has_attr("data-encrypted")]
 
     if not encrypted_regions:
-        raise click.ClickException("File has no encrypted regions")
+        raise click.ClickException("No encrypted regions found")
 
     click.echo(f"File: {_relative_path(file_path)}")
     click.echo(f"Encrypted regions: {len(encrypted_regions)}")
@@ -1309,12 +1419,34 @@ def check(path, password, username):
     except Exception:
         soup = BeautifulSoup(content, "html.parser")
 
+    # Check for v3 chunked format first
+    pv_meta_el = soup.find("script", {"id": "pv-meta"})
+    if pv_meta_el:
+        import json
+
+        from .crypto import verify_password_v3
+
+        try:
+            envelope = json.loads(pv_meta_el.string)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise click.ClickException(f"Invalid pv-meta JSON: {e}")
+
+        try:
+            result = verify_password_v3(envelope, password, username=username)
+        except PagevaultError as e:
+            raise click.ClickException(str(e))
+
+        if result:
+            click.echo("Password correct")
+            raise SystemExit(0)
+        else:
+            click.echo("Password incorrect")
+            raise SystemExit(1)
+
+    # Fall through to v2 region-encrypted check
     encrypted_el = soup.find("pagevault", {"data-encrypted": True})
     if not encrypted_el:
-        # Check for wrap-style payload
-        encrypted_el = soup.find("pagevault", {"data-encrypted": True})
-        if not encrypted_el:
-            raise click.ClickException("No encrypted regions found")
+        raise click.ClickException("No encrypted regions found")
 
     payload = encrypted_el.get("data-encrypted", "")
     if not payload:
@@ -1347,12 +1479,30 @@ def config():
     default=".",
     help="Directory to create config in",
 )
-def config_init(directory):
-    """Create a new .pagevault.yaml configuration file.
+@click.option(
+    "--global",
+    "is_global",
+    is_flag=True,
+    help="Create global user config (~/.config/pagevault/config.yaml)",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Overwrite existing config file",
+)
+def config_init(directory, is_global, force):
+    """Create a new pagevault configuration file.
 
-    Generates a config file with a random salt and example settings.
+    Generates a .pagevault.yaml config file with a random salt and example settings.
     Remember to add .pagevault.yaml to your .gitignore!
+
+    With --global, creates ~/.config/pagevault/config.yaml with your personal
+    credentials that are automatically merged into every project's config.
     """
+    if is_global:
+        _init_global(force=force)
+        return
+
     try:
         config_path = create_default_config(Path(directory))
         click.echo(f"Created: {config_path}")
@@ -1364,26 +1514,150 @@ def config_init(directory):
         raise click.ClickException(str(e))
 
 
+def _init_global(force: bool) -> None:
+    """Create a global user configuration."""
+    # Prompt for user credentials
+    username = click.prompt("Username")
+    if not username:
+        raise click.ClickException("Username cannot be empty.")
+    if ":" in username:
+        raise click.ClickException(
+            f"Username '{username}' cannot contain ':' (used as delimiter)."
+        )
+
+    user_password = click.prompt(
+        "Password", hide_input=True, confirmation_prompt=True
+    )
+    if not user_password:
+        raise click.ClickException("Password cannot be empty.")
+
+    try:
+        global_path = create_global_config(
+            users={username: user_password},
+            default_user=username,
+            force=force,
+        )
+        click.echo(f"Created: {global_path}")
+        click.echo(f"  User: {username}")
+        click.echo()
+        click.echo("Your credentials will be merged into every project's config.")
+    except PagevaultError as e:
+        raise click.ClickException(str(e))
+
+
 @config.command("show")
 @click.option(
     "-c",
     "--config",
     "config_path",
-    type=click.Path(exists=True),
+    type=click.Path(),
     help="Config file path",
 )
-def config_show(config_path):
-    """Display current configuration.
+@click.option(
+    "--show-passwords",
+    is_flag=True,
+    help="Show passwords in plaintext (masked by default)",
+)
+def config_show(config_path, show_passwords):
+    """Display effective configuration with source annotations.
 
-    Shows merged configuration from file, environment, and defaults.
-    Password is masked for security.
+    Shows where each value comes from: local config, global config,
+    or merged from both. Passwords are masked by default.
     """
-    try:
-        cfg = load_config(config_path=Path(config_path) if config_path else None)
-        data = config_to_dict(cfg)
-        click.echo(yaml.dump(data, default_flow_style=False, sort_keys=False))
-    except PagevaultError as e:
-        raise click.ClickException(str(e))
+    # Resolve local config path
+    if config_path:
+        local_path = Path(config_path).resolve()
+    else:
+        local_path = find_config_file()
+
+    has_local = local_path is not None and local_path.exists()
+    global_data = load_global_config()
+    has_global = bool(global_data)
+    global_path = get_global_config_path()
+
+    if not has_local and not has_global:
+        click.echo("No config found (no local .pagevault.yaml and no global config).", err=True)
+        click.echo("Run 'pagevault config init' to create a local config.", err=True)
+        click.echo("Run 'pagevault config init --global' to create a global config.", err=True)
+        sys.exit(1)
+
+    local_data: dict = {}
+    if has_local:
+        try:
+            local_data = yaml.safe_load(local_path.read_text(encoding="utf-8")) or {}
+        except OSError as e:
+            click.echo(f"Error reading config file: {e}", err=True)
+            sys.exit(1)
+
+    def _mask(password: str) -> str:
+        if show_passwords:
+            return password
+        return password[:2] + "***" if len(password) > 2 else "***"
+
+    # Header: show config file paths
+    if has_local:
+        click.echo(f"Local:  {local_path}")
+    if has_global:
+        click.echo(f"Global: {global_path}")
+    click.echo()
+
+    # Password — show source
+    local_pw = local_data.get("password")
+    global_pw = global_data.get("password")
+    if local_pw:
+        source = "local (overrides global)" if global_pw else "local"
+        click.echo(f"password: {_mask(str(local_pw))}  # {source}")
+    elif global_pw:
+        click.echo(f"password: {_mask(str(global_pw))}  # global")
+
+    # Salt — show source
+    local_salt = local_data.get("salt")
+    global_salt = global_data.get("salt")
+    if local_salt:
+        source = "local (overrides global)" if global_salt else "local"
+        click.echo(f"salt: {local_salt}  # {source}")
+    elif global_salt:
+        click.echo(f"salt: {global_salt}  # global")
+
+    # Users — show source for each
+    global_users = global_data.get("users", {})
+    local_users = local_data.get("users", {})
+    merged_users = {**global_users, **local_users}
+
+    if merged_users:
+        click.echo("users:")
+        for username, password in merged_users.items():
+            masked = _mask(str(password))
+            if username in local_users and username in global_users:
+                source = "local (overrides global)"
+            elif username in local_users:
+                source = "local"
+            else:
+                source = "global"
+            click.echo(f"  {username}: {masked}  # {source}")
+
+    # Default user — show source
+    local_user = local_data.get("user")
+    global_user = global_data.get("user")
+    if local_user:
+        source = "local (overrides global)" if global_user else "local"
+        click.echo(f"user: {local_user}  # {source}")
+    elif global_user:
+        click.echo(f"user: {global_user}  # global")
+
+    # Defaults — show source
+    local_defaults = local_data.get("defaults", {})
+    global_defaults = global_data.get("defaults", {})
+    if local_defaults or global_defaults:
+        click.echo("defaults:")
+        for key in ["remember", "remember_days", "auto_prompt"]:
+            l_val = local_defaults.get(key) if isinstance(local_defaults, dict) else None
+            g_val = global_defaults.get(key) if isinstance(global_defaults, dict) else None
+            if l_val is not None:
+                source = "local (overrides global)" if g_val is not None else "local"
+                click.echo(f"  {key}: {l_val}  # {source}")
+            elif g_val is not None:
+                click.echo(f"  {key}: {g_val}  # global")
 
 
 @config.command("where")
@@ -1394,17 +1668,30 @@ def config_show(config_path):
     help="Directory to search from",
 )
 def config_where(directory):
-    """Show which config file would be used.
+    """Show which config files would be used.
 
-    Searches up the directory tree for .pagevault.yaml.
+    Shows both the global config and the local project config found
+    by searching up the directory tree.
     """
+    # Global config
+    global_path = get_global_config_path()
+    if global_path.exists():
+        global_data = load_global_config()
+        global_users = list(global_data.get("users", {}).keys())
+        click.echo(f"Global config: {global_path}")
+        if global_users:
+            click.echo(f"  Users: {', '.join(global_users)}")
+    else:
+        click.echo(f"Global config: {global_path} (not found)")
+
+    # Local config
     start = Path(directory) if directory else Path.cwd()
     config_path = find_config_file(start)
 
     if config_path:
-        click.echo(f"Config file: {config_path}")
+        click.echo(f"Local config:  {config_path}")
     else:
-        click.echo(f"No {CONFIG_FILENAME} found (searched from {start})")
+        click.echo(f"Local config:  No {CONFIG_FILENAME} found (searched from {start})")
 
 
 @config.group()
@@ -1435,9 +1722,29 @@ def _resolve_config_path(config_path: str | None) -> Path:
     return found
 
 
+def _load_raw_global() -> dict:
+    """Load raw YAML from global config, raising if missing."""
+    path = get_global_config_path()
+    if not path.exists():
+        raise FileNotFoundError(f"Global config not found: {path}")
+    with open(path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def _save_global(data: dict) -> None:
+    """Write data back to global config."""
+    path = get_global_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = "# pagevault global configuration\n"
+    content += "# Personal credentials merged into every project's config.\n\n"
+    content += yaml.dump(data, default_flow_style=False, sort_keys=False)
+    path.write_text(content, encoding="utf-8")
+
+
 @user.command("add")
 @click.argument("username")
 @click.option("-p", "--password", "user_password", help="Password (prompts if omitted)")
+@click.option("--global", "is_global", is_flag=True, help="Add to global config")
 @click.option(
     "-c",
     "--config",
@@ -1445,13 +1752,12 @@ def _resolve_config_path(config_path: str | None) -> Path:
     type=click.Path(exists=True),
     help="Config file path",
 )
-def user_add(username, user_password, config_path):
+def user_add(username, user_password, is_global, config_path):
     """Add a new user to the config.
 
     Prompts for password interactively unless -p is given.
+    Use --global to add the user to your global config instead.
     """
-    resolved = _resolve_config_path(config_path)
-
     # Validate username
     if not username:
         raise click.ClickException("Username cannot be empty.")
@@ -1460,13 +1766,18 @@ def user_add(username, user_password, config_path):
             f"Username '{username}' cannot contain ':' (used as delimiter)."
         )
 
-    # Load current config
+    # Load config
     try:
-        cfg = load_config(config_path=resolved)
-    except PagevaultError as e:
+        if is_global:
+            raw = _load_raw_global()
+        else:
+            resolved = _resolve_config_path(config_path)
+            with open(resolved) as f:
+                raw = yaml.safe_load(f) or {}
+    except FileNotFoundError as e:
         raise click.ClickException(str(e))
 
-    users = dict(cfg.users) if cfg.users else {}
+    users = raw.get("users", {}) or {}
 
     if username in users:
         raise click.ClickException(
@@ -1483,18 +1794,24 @@ def user_add(username, user_password, config_path):
         raise click.ClickException("Password cannot be empty.")
 
     users[username] = user_password
+    raw["users"] = users
 
+    target = "global" if is_global else "local"
     try:
-        update_config_users(resolved, users)
+        if is_global:
+            _save_global(raw)
+        else:
+            update_config_users(resolved, users)
     except PagevaultError as e:
         raise click.ClickException(str(e))
 
-    click.echo(f"Added user '{username}'.")
+    click.echo(f"Added user '{username}' ({target}).")
     click.echo("Run 'pagevault sync' to update encrypted files for the new user.")
 
 
 @user.command("rm")
 @click.argument("username")
+@click.option("--global", "is_global", is_flag=True, help="Remove from global config")
 @click.option(
     "-c",
     "--config",
@@ -1502,32 +1819,53 @@ def user_add(username, user_password, config_path):
     type=click.Path(exists=True),
     help="Config file path",
 )
-def user_rm(username, config_path):
-    """Remove a user from the config."""
-    resolved = _resolve_config_path(config_path)
+def user_rm(username, is_global, config_path):
+    """Remove a user from the config.
 
+    Use --global to remove from your global config instead.
+    """
     try:
-        cfg = load_config(config_path=resolved)
-    except PagevaultError as e:
+        if is_global:
+            raw = _load_raw_global()
+        else:
+            resolved = _resolve_config_path(config_path)
+            with open(resolved) as f:
+                raw = yaml.safe_load(f) or {}
+    except FileNotFoundError as e:
         raise click.ClickException(str(e))
 
-    users = dict(cfg.users) if cfg.users else {}
+    users = raw.get("users", {}) or {}
 
     if username not in users:
+        # Check if user exists in the other tier
+        other_tier = "global" if not is_global else "local"
+        global_users = load_global_config().get("users", {})
+        all_users = {**global_users, **users}
+        if username in all_users:
+            raise click.ClickException(
+                f"User '{username}' is not in {'global' if is_global else 'local'} config "
+                f"(exists in {other_tier}; use {'--global' if not is_global else '-c'} to remove)"
+            )
         raise click.ClickException(f"User '{username}' not found.")
 
     del users[username]
+    raw["users"] = users if users else {}
 
+    target = "global" if is_global else "local"
     try:
-        update_config_users(resolved, users if users else None)
+        if is_global:
+            _save_global(raw)
+        else:
+            update_config_users(resolved, users if users else None)
     except PagevaultError as e:
         raise click.ClickException(str(e))
 
-    click.echo(f"Removed user '{username}'.")
+    click.echo(f"Removed user '{username}' ({target}).")
     click.echo("Run 'pagevault sync' to update encrypted files.")
 
 
 @user.command("list")
+@click.option("--global", "is_global", is_flag=True, help="List only global config users")
 @click.option(
     "-c",
     "--config",
@@ -1535,8 +1873,24 @@ def user_rm(username, config_path):
     type=click.Path(exists=True),
     help="Config file path",
 )
-def user_list(config_path):
-    """List configured users."""
+def user_list(is_global, config_path):
+    """List configured users.
+
+    Use --global to list only users from the global config.
+    """
+    if is_global:
+        try:
+            raw = _load_raw_global()
+        except FileNotFoundError as e:
+            raise click.ClickException(str(e))
+        users = raw.get("users", {}) or {}
+        if not users:
+            click.echo("(no users in global config)")
+            return
+        for name in users:
+            click.echo(name)
+        return
+
     resolved = _resolve_config_path(config_path)
 
     try:
@@ -1560,6 +1914,7 @@ def user_list(config_path):
     "user_password",
     help="New password (prompts if omitted)",
 )
+@click.option("--global", "is_global", is_flag=True, help="Update in global config")
 @click.option(
     "-c",
     "--config",
@@ -1567,16 +1922,22 @@ def user_list(config_path):
     type=click.Path(exists=True),
     help="Config file path",
 )
-def user_passwd(username, user_password, config_path):
-    """Change a user's password."""
-    resolved = _resolve_config_path(config_path)
+def user_passwd(username, user_password, is_global, config_path):
+    """Change a user's password.
 
+    Use --global to update the password in your global config instead.
+    """
     try:
-        cfg = load_config(config_path=resolved)
-    except PagevaultError as e:
+        if is_global:
+            raw = _load_raw_global()
+        else:
+            resolved = _resolve_config_path(config_path)
+            with open(resolved) as f:
+                raw = yaml.safe_load(f) or {}
+    except FileNotFoundError as e:
         raise click.ClickException(str(e))
 
-    users = dict(cfg.users) if cfg.users else {}
+    users = raw.get("users", {}) or {}
 
     if username not in users:
         raise click.ClickException(f"User '{username}' not found.")
@@ -1589,13 +1950,18 @@ def user_passwd(username, user_password, config_path):
         raise click.ClickException("Password cannot be empty.")
 
     users[username] = user_password
+    raw["users"] = users
 
+    target = "global" if is_global else "local"
     try:
-        update_config_users(resolved, users)
+        if is_global:
+            _save_global(raw)
+        else:
+            update_config_users(resolved, users)
     except PagevaultError as e:
         raise click.ClickException(str(e))
 
-    click.echo(f"Password updated for '{username}'.")
+    click.echo(f"Password updated for '{username}' ({target}).")
     click.echo("Run 'pagevault sync' to update encrypted files.")
 
 
@@ -1658,6 +2024,16 @@ def _get_output_path(input_path: Path, source_paths: tuple, output_base: Path) -
 
     # Fallback: just use filename
     return output_base / input_path.name
+
+
+def _format_size(n: int) -> str:
+    """Format byte size for display."""
+    if n < 1024:
+        return f"{n} B"
+    elif n < 1048576:
+        return f"{n / 1024:.1f} KB"
+    else:
+        return f"{n / 1048576:.1f} MB"
 
 
 def _relative_path(path: Path) -> str:

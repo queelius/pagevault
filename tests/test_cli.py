@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from pagevault.cli import main
@@ -77,16 +78,64 @@ class TestConfigShow:
     """Tests for config show command."""
 
     def test_shows_config(self, runner, tmp_path, sample_config):
-        """Test showing configuration."""
+        """Test showing configuration with source annotations."""
         config_path = tmp_path / CONFIG_FILENAME
         config_path.write_text(sample_config)
 
         result = runner.invoke(main, ["config", "show", "-c", str(config_path)])
 
         assert result.exit_code == 0
-        assert "password: '********'" in result.output
+        assert "te***" in result.output
         assert "salt:" in result.output
+        assert "# local" in result.output
         assert "remember: ask" in result.output
+
+    def test_shows_no_config(self, runner, tmp_path, monkeypatch):
+        """Test error when no config exists at all."""
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(main, ["config", "show"])
+
+        assert result.exit_code != 0
+        assert "No config found" in result.output
+
+    def test_shows_global_only(self, runner, tmp_path, monkeypatch):
+        """Test showing config when only global config exists."""
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text(
+            'password: "global-pass"\nusers:\n  carol: "carol-pw"\n'
+        )
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(main, ["config", "show"])
+
+        assert result.exit_code == 0
+        assert "# global" in result.output
+        assert "carol" in result.output
+
+    def test_shows_source_overrides(self, runner, tmp_path, monkeypatch):
+        """Test source annotations when local overrides global."""
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text(
+            'users:\n  alice: "global-pw"\n  carol: "carol-pw"\n'
+        )
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(
+            'users:\n  alice: "local-pw"\nsalt: "0123456789abcdef0123456789abcdef"\n'
+        )
+
+        result = runner.invoke(main, ["config", "show", "-c", str(config_path)])
+
+        assert result.exit_code == 0
+        assert "local (overrides global)" in result.output
+        assert "carol" in result.output
 
 
 class TestConfigWhere:
@@ -1828,6 +1877,190 @@ users:
         assert "not found" in result.output
 
 
+class TestUserAddGlobal:
+    """Tests for config user add --global."""
+
+    def _setup_global(self, tmp_path, monkeypatch, users=None):
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        data = {"users": users or {"alice": "pw-alice"}}
+        (pv_dir / "config.yaml").write_text(yaml.dump(data))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+        return pv_dir / "config.yaml"
+
+    def test_add_user_global(self, runner, tmp_path, monkeypatch):
+        global_path = self._setup_global(tmp_path, monkeypatch)
+        result = runner.invoke(
+            main,
+            ["config", "user", "add", "bob", "-p", "pw-bob", "--global"],
+        )
+        assert result.exit_code == 0
+        assert "bob" in result.output
+        assert "global" in result.output
+
+        data = yaml.safe_load(global_path.read_text())
+        assert data["users"]["bob"] == "pw-bob"
+        assert data["users"]["alice"] == "pw-alice"
+
+    def test_add_duplicate_global_fails(self, runner, tmp_path, monkeypatch):
+        self._setup_global(tmp_path, monkeypatch)
+        result = runner.invoke(
+            main,
+            ["config", "user", "add", "alice", "-p", "pw", "--global"],
+        )
+        assert result.exit_code != 0
+        assert "already exists" in result.output
+
+    def test_no_global_config_fails(self, runner, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        config_home.mkdir()
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+        result = runner.invoke(
+            main,
+            ["config", "user", "add", "bob", "-p", "pw", "--global"],
+        )
+        assert result.exit_code != 0
+        assert "not found" in result.output.lower()
+
+
+class TestUserRmGlobal:
+    """Tests for config user rm --global."""
+
+    def _setup_global(self, tmp_path, monkeypatch, users=None):
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        data = {"users": users or {"alice": "pw-alice", "bob": "pw-bob"}}
+        (pv_dir / "config.yaml").write_text(yaml.dump(data))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+        return pv_dir / "config.yaml"
+
+    def test_remove_user_global(self, runner, tmp_path, monkeypatch):
+        global_path = self._setup_global(tmp_path, monkeypatch)
+        result = runner.invoke(
+            main,
+            ["config", "user", "rm", "bob", "--global"],
+        )
+        assert result.exit_code == 0
+        assert "bob" in result.output
+        assert "global" in result.output
+
+        data = yaml.safe_load(global_path.read_text())
+        assert "bob" not in data["users"]
+        assert "alice" in data["users"]
+
+    def test_remove_nonexistent_global_fails(self, runner, tmp_path, monkeypatch):
+        self._setup_global(tmp_path, monkeypatch)
+        result = runner.invoke(
+            main,
+            ["config", "user", "rm", "charlie", "--global"],
+        )
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+    def test_hints_when_user_in_other_tier(self, runner, tmp_path, monkeypatch):
+        """Removing a global-only user from local config hints about --global."""
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text(
+            yaml.dump({"users": {"globaluser": "gpass"}})
+        )
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text("""
+password: "test-pw"
+salt: "0123456789abcdef0123456789abcdef"
+users:
+  localuser: "pw-local"
+""")
+        result = runner.invoke(
+            main,
+            ["config", "user", "rm", "globaluser", "-c", str(config_path)],
+        )
+        assert result.exit_code != 0
+        assert "global" in result.output
+        assert "--global" in result.output
+
+
+class TestUserListGlobal:
+    """Tests for config user list --global."""
+
+    def test_list_global_users(self, runner, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text(
+            yaml.dump({"users": {"alice": "pw", "bob": "pw"}})
+        )
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        result = runner.invoke(main, ["config", "user", "list", "--global"])
+        assert result.exit_code == 0
+        assert "alice" in result.output
+        assert "bob" in result.output
+
+    def test_list_empty_global(self, runner, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text(yaml.dump({}))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        result = runner.invoke(main, ["config", "user", "list", "--global"])
+        assert result.exit_code == 0
+        assert "no users" in result.output.lower()
+
+
+class TestUserPasswdGlobal:
+    """Tests for config user passwd --global."""
+
+    def _setup_global(self, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        data = {"users": {"alice": "old-pw"}}
+        (pv_dir / "config.yaml").write_text(yaml.dump(data))
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+        return pv_dir / "config.yaml"
+
+    def test_change_password_global(self, runner, tmp_path, monkeypatch):
+        global_path = self._setup_global(tmp_path, monkeypatch)
+        result = runner.invoke(
+            main,
+            ["config", "user", "passwd", "alice", "-p", "new-pw", "--global"],
+        )
+        assert result.exit_code == 0
+        assert "alice" in result.output
+        assert "global" in result.output
+
+        data = yaml.safe_load(global_path.read_text())
+        assert data["users"]["alice"] == "new-pw"
+
+    def test_change_nonexistent_global_fails(self, runner, tmp_path, monkeypatch):
+        self._setup_global(tmp_path, monkeypatch)
+        result = runner.invoke(
+            main,
+            ["config", "user", "passwd", "charlie", "-p", "pw", "--global"],
+        )
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+    def test_change_password_interactive_global(self, runner, tmp_path, monkeypatch):
+        global_path = self._setup_global(tmp_path, monkeypatch)
+        result = runner.invoke(
+            main,
+            ["config", "user", "passwd", "alice", "--global"],
+            input="new-pw\nnew-pw\n",
+        )
+        assert result.exit_code == 0
+
+        data = yaml.safe_load(global_path.read_text())
+        assert data["users"]["alice"] == "new-pw"
+
+
 class TestLockWithUsername:
     """Tests for lock command with -u flag."""
 
@@ -2297,8 +2530,8 @@ users:
         assert "no pagevault elements" in result.output.lower()
 
     def test_info_wrap_file(self, runner, tmp_path):
-        """Test info on wrapped file shows wrap type and filename."""
-        # Create a text file and wrap it
+        """Test info on wrapped file shows v3 chunked format."""
+        # Create a text file and wrap it (now uses v3 chunked format)
         txt_path = tmp_path / "data.txt"
         txt_path.write_text("test content")
 
@@ -2313,8 +2546,9 @@ users:
         result = runner.invoke(main, ["info", str(out_path)])
 
         assert result.exit_code == 0
-        assert "Wrap type:       file" in result.output
-        assert "data.txt" in result.output
+        assert "v3 chunked" in result.output
+        assert "Chunks:" in result.output
+        assert "Total size:" in result.output
 
 
 class TestCheckCommand:
@@ -2756,3 +2990,464 @@ pad: true
         assert result.exit_code == 0
         content = (unlocked_dir / "index.html").read_text()
         assert "Config pad" in content
+
+
+# =============================================================================
+# Global config CLI tests
+# =============================================================================
+
+
+class TestConfigInitGlobal:
+    """Tests for config init --global command."""
+
+    def test_creates_global_config(self, runner, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        config_home.mkdir()
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        result = runner.invoke(
+            main,
+            ["config", "init", "--global"],
+            input="alice\nmypass\nmypass\n",
+        )
+        assert result.exit_code == 0
+        assert "Created" in result.output
+
+        global_path = config_home / "pagevault" / "config.yaml"
+        assert global_path.exists()
+        data = yaml.safe_load(global_path.read_text())
+        assert data["users"]["alice"] == "mypass"
+
+    def test_refuses_overwrite(self, runner, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text("password: old\n")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        result = runner.invoke(
+            main,
+            ["config", "init", "--global"],
+            input="alice\npass\npass\n",
+        )
+        assert result.exit_code != 0
+        assert "already exists" in result.output
+
+    def test_force_overwrites(self, runner, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text("password: old\n")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        result = runner.invoke(
+            main,
+            ["config", "init", "--global", "--force"],
+            input="alice\nnewpass\nnewpass\n",
+        )
+        assert result.exit_code == 0
+
+        data = yaml.safe_load((pv_dir / "config.yaml").read_text())
+        assert "alice" in data["users"]
+
+
+class TestConfigWhereGlobal:
+    """Tests for config where showing global config."""
+
+    def test_shows_global_info(self, runner, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text(
+            yaml.dump({"users": {"carol": "pass"}}), encoding="utf-8"
+        )
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        result = runner.invoke(main, ["config", "where", "-d", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "Global config:" in result.output
+        assert "carol" in result.output
+
+    def test_shows_no_global(self, runner, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        config_home.mkdir()
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        result = runner.invoke(main, ["config", "where", "-d", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "not found" in result.output
+
+
+class TestConfigShowPasswords:
+    """Tests for config show --show-passwords flag."""
+
+    def test_passwords_masked_by_default(self, runner, tmp_path):
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(
+            'password: "test-password"\nsalt: "0123456789abcdef0123456789abcdef"\n'
+        )
+
+        result = runner.invoke(main, ["config", "show", "-c", str(config_path)])
+        assert result.exit_code == 0
+        assert "te***" in result.output
+        assert "test-password" not in result.output
+
+    def test_show_passwords_reveals(self, runner, tmp_path):
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(
+            'password: "test-password"\nsalt: "0123456789abcdef0123456789abcdef"\n'
+        )
+
+        result = runner.invoke(
+            main,
+            ["config", "show", "--show-passwords", "-c", str(config_path)],
+        )
+        assert result.exit_code == 0
+        assert "test-password" in result.output
+
+    def test_global_passwords_masked(self, runner, tmp_path, monkeypatch):
+        """Global user passwords are also masked."""
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text('users:\n  carol: "global-password"\n')
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(main, ["config", "show"])
+        assert result.exit_code == 0
+        assert "gl***" in result.output
+        assert "global-password" not in result.output
+
+
+class TestWrapFlag:
+    """Tests for --wrap flag on lock command."""
+
+    @pytest.fixture
+    def sample_config(self):
+        return 'password: "test-password"\nsalt: "0123456789abcdef0123456789abcdef"\n'
+
+    def test_wrap_html_produces_file_wrapped_output(
+        self, runner, tmp_path, sample_config
+    ):
+        """--wrap on HTML creates file-wrapped output, not region encryption."""
+        html_path = tmp_path / "page.html"
+        html_path.write_text(
+            "<!DOCTYPE html><html><head>"
+            "<title>Secret Title</title></head>"
+            "<body><h1>Secret</h1></body></html>"
+        )
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(sample_config)
+
+        out_dir = tmp_path / "out"
+        result = runner.invoke(
+            main,
+            [
+                "lock",
+                str(html_path),
+                "--wrap",
+                "-c",
+                str(config_path),
+                "-d",
+                str(out_dir),
+            ],
+        )
+        assert result.exit_code == 0
+        assert "Wrapped:" in result.output
+
+        output = (out_dir / "page.html").read_text()
+        # File-wrapped output has "Protected:" title, not original
+        assert "Protected: page.html" in output
+        # Original title must NOT leak
+        assert "Secret Title" not in output
+
+    def test_wrap_default_directory(self, runner, tmp_path, sample_config, monkeypatch):
+        """--wrap defaults to _locked/ output directory."""
+        monkeypatch.chdir(tmp_path)
+
+        html_path = tmp_path / "page.html"
+        html_path.write_text("<!DOCTYPE html><html><body>Content</body></html>")
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(sample_config)
+
+        result = runner.invoke(
+            main,
+            [
+                "lock",
+                str(html_path),
+                "--wrap",
+                "-c",
+                str(config_path),
+            ],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0
+        assert "_locked/" in result.output
+        assert (tmp_path / "_locked" / "page.html").exists()
+
+    def test_wrap_rejects_directories(self, runner, tmp_path, sample_config):
+        """--wrap does not accept directories (use --site instead)."""
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(sample_config)
+
+        result = runner.invoke(
+            main,
+            ["lock", str(tmp_path), "--wrap", "-c", str(config_path)],
+        )
+        assert result.exit_code != 0
+        assert "--wrap requires files" in result.output
+
+    def test_wrap_with_output_flag(self, runner, tmp_path, sample_config):
+        """--wrap with -o writes to specific output path."""
+        html_path = tmp_path / "page.html"
+        html_path.write_text("<!DOCTYPE html><html><body>Content</body></html>")
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(sample_config)
+
+        out_file = tmp_path / "custom-output.html"
+        result = runner.invoke(
+            main,
+            [
+                "lock",
+                str(html_path),
+                "--wrap",
+                "-o",
+                str(out_file),
+                "-c",
+                str(config_path),
+            ],
+        )
+        assert result.exit_code == 0
+        assert out_file.exists()
+
+    def test_wrap_source_not_modified(self, runner, tmp_path, sample_config):
+        """--wrap does not modify the source HTML file."""
+        original = (
+            "<!DOCTYPE html><html><head>"
+            "<title>Original</title></head>"
+            "<body><h1>Content</h1></body></html>"
+        )
+        html_path = tmp_path / "page.html"
+        html_path.write_text(original)
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(sample_config)
+
+        out_dir = tmp_path / "out"
+        runner.invoke(
+            main,
+            [
+                "lock",
+                str(html_path),
+                "--wrap",
+                "-c",
+                str(config_path),
+                "-d",
+                str(out_dir),
+            ],
+        )
+        # Source file must be unchanged
+        assert html_path.read_text() == original
+
+    def test_wrap_non_html_still_works(self, runner, tmp_path, sample_config):
+        """--wrap on non-HTML files works the same as regular lock."""
+        txt_path = tmp_path / "notes.txt"
+        txt_path.write_text("Some notes")
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(sample_config)
+
+        out_dir = tmp_path / "out"
+        result = runner.invoke(
+            main,
+            [
+                "lock",
+                str(txt_path),
+                "--wrap",
+                "-c",
+                str(config_path),
+                "-d",
+                str(out_dir),
+            ],
+        )
+        assert result.exit_code == 0
+        assert (out_dir / "notes.txt.html").exists()
+
+
+class TestInfoV3:
+    """Tests for info command on v3 wrapped files."""
+
+    def test_info_v3_shows_chunk_info(self, runner, tmp_path):
+        """Info on v3 file shows chunk count and total size."""
+        txt_path = tmp_path / "test.txt"
+        txt_path.write_text("Hello!")
+        out_path = tmp_path / "test.html"
+
+        result = runner.invoke(
+            main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)]
+        )
+        assert result.exit_code == 0
+
+        result = runner.invoke(main, ["info", str(out_path)])
+        assert result.exit_code == 0
+        assert "v3 chunked" in result.output
+        assert "Chunks:" in result.output
+        assert "Total size:" in result.output
+        assert "Chunk size:" in result.output
+        assert "Key blobs:" in result.output
+
+    def test_info_v3_shows_algorithm(self, runner, tmp_path):
+        """Info on v3 file shows algorithm and KDF."""
+        txt_path = tmp_path / "test.txt"
+        txt_path.write_text("Hello!")
+        out_path = tmp_path / "test.html"
+
+        runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
+
+        result = runner.invoke(main, ["info", str(out_path)])
+        assert result.exit_code == 0
+        assert "aes-256-gcm" in result.output
+        assert "pbkdf2-sha256" in result.output
+        assert "310,000" in result.output
+
+    def test_info_v3_shows_content_hash(self, runner, tmp_path):
+        """Info on v3 file shows content hash if present."""
+        txt_path = tmp_path / "test.txt"
+        txt_path.write_text("Hello!")
+        out_path = tmp_path / "test.html"
+
+        runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
+
+        result = runner.invoke(main, ["info", str(out_path)])
+        assert result.exit_code == 0
+        assert "Content hash:" in result.output
+
+    def test_info_v3_shows_runtime(self, runner, tmp_path):
+        """Info on v3 file shows runtime scripts and styles."""
+        txt_path = tmp_path / "test.txt"
+        txt_path.write_text("Hello!")
+        out_path = tmp_path / "test.html"
+
+        runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
+
+        result = runner.invoke(main, ["info", str(out_path)])
+        assert result.exit_code == 0
+        assert "Runtime scripts:" in result.output
+        assert "Runtime styles:" in result.output
+        assert "pagevault:" in result.output
+
+    def test_info_v3_shows_version(self, runner, tmp_path):
+        """Info on v3 file shows version number."""
+        txt_path = tmp_path / "test.txt"
+        txt_path.write_text("Hello!")
+        out_path = tmp_path / "test.html"
+
+        runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
+
+        result = runner.invoke(main, ["info", str(out_path)])
+        assert result.exit_code == 0
+        assert "Version:        v3" in result.output
+
+    def test_info_v3_chunk_tags(self, runner, tmp_path):
+        """Info on v3 file counts chunk script tags."""
+        txt_path = tmp_path / "test.txt"
+        txt_path.write_text("Hello!")
+        out_path = tmp_path / "test.html"
+
+        runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
+
+        result = runner.invoke(main, ["info", str(out_path)])
+        assert result.exit_code == 0
+        assert "Chunk tags:" in result.output
+
+    def test_info_v3_site_mode(self, runner, tmp_path):
+        """Info on v3 site shows site-related info."""
+        site_dir = tmp_path / "site"
+        site_dir.mkdir()
+        (site_dir / "index.html").write_text("<h1>Home</h1>")
+        (site_dir / "style.css").write_text("body { color: red; }")
+
+        out_path = tmp_path / "site.html"
+
+        result = runner.invoke(
+            main,
+            [
+                "lock",
+                str(site_dir),
+                "--site",
+                "-p",
+                "pw",
+                "-o",
+                str(out_path),
+            ],
+        )
+        assert result.exit_code == 0
+
+        result = runner.invoke(main, ["info", str(out_path)])
+        assert result.exit_code == 0
+        assert "v3 chunked" in result.output
+
+
+class TestCheckV3:
+    """Tests for check command on v3 wrapped files."""
+
+    def test_check_v3_correct_password(self, runner, tmp_path):
+        """Check command works on v3 files with correct password."""
+        txt_path = tmp_path / "test.txt"
+        txt_path.write_text("Secret")
+        out_path = tmp_path / "test.html"
+
+        runner.invoke(main, ["lock", str(txt_path), "-p", "my-pw", "-o", str(out_path)])
+
+        result = runner.invoke(main, ["check", str(out_path), "-p", "my-pw"])
+        assert "correct" in result.output.lower()
+        assert result.exit_code == 0
+
+    def test_check_v3_wrong_password(self, runner, tmp_path):
+        """Check command detects wrong password on v3 files."""
+        txt_path = tmp_path / "test.txt"
+        txt_path.write_text("Secret")
+        out_path = tmp_path / "test.html"
+
+        runner.invoke(main, ["lock", str(txt_path), "-p", "my-pw", "-o", str(out_path)])
+
+        result = runner.invoke(main, ["check", str(out_path), "-p", "wrong"])
+        assert "incorrect" in result.output.lower()
+        assert result.exit_code == 1
+
+    def test_check_v3_non_encrypted_fails(self, runner, tmp_path):
+        """Check on plain file fails gracefully."""
+        html_path = tmp_path / "plain.html"
+        html_path.write_text("<html><body>Hello</body></html>")
+
+        result = runner.invoke(main, ["check", str(html_path), "-p", "test"])
+        assert result.exit_code != 0
+
+    def test_check_v3_site(self, runner, tmp_path):
+        """Check command works on v3 site files."""
+        site_dir = tmp_path / "site"
+        site_dir.mkdir()
+        (site_dir / "index.html").write_text("<h1>Home</h1>")
+
+        out_path = tmp_path / "site.html"
+
+        runner.invoke(
+            main,
+            [
+                "lock",
+                str(site_dir),
+                "--site",
+                "-p",
+                "site-pw",
+                "-o",
+                str(out_path),
+            ],
+        )
+
+        result = runner.invoke(main, ["check", str(out_path), "-p", "site-pw"])
+        assert "correct" in result.output.lower()
+        assert result.exit_code == 0
