@@ -315,6 +315,11 @@ class TestPdfViewer:
     def test_mime_types(self):
         assert PdfViewer().mime_types == ["application/pdf"]
 
+    def test_no_sandbox(self):
+        """PdfViewer does not need sandbox (PDF renderer is safe)."""
+        js = PdfViewer().js()
+        assert "sandbox" not in js
+
 
 class TestHtmlViewer:
     """Tests for the HtmlViewer plugin."""
@@ -746,11 +751,6 @@ class TestHtmlViewerSrcdoc:
         js = HtmlViewer().js()
         assert "pushState" in js
         assert "replaceState" in js
-
-    def test_pdf_viewer_no_sandbox(self):
-        """PdfViewer does not need sandbox (PDF renderer is safe)."""
-        js = PdfViewer().js()
-        assert "sandbox" not in js
 
 
 # ─────────────────────────────────────────────────────────────────────

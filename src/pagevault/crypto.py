@@ -92,8 +92,74 @@ def _unwrap_key(iv: bytes, ct: bytes, wrapping_key: bytes) -> bytes | None:
     aesgcm = AESGCM(wrapping_key)
     try:
         return aesgcm.decrypt(iv, ct, None)
-    except (InvalidTag, Exception):
+    except Exception:
         return None
+
+
+def _wrap_cek_for_users(
+    cek: bytes,
+    salt: bytes,
+    password: str | None = None,
+    users: dict[str, str] | None = None,
+) -> list[dict[str, str]]:
+    """Wrap a CEK for one or more users, returning base64-encoded key blobs.
+
+    Exactly one of ``password`` or ``users`` must be provided.
+
+    Args:
+        cek: Content Encryption Key to wrap.
+        salt: Salt for PBKDF2 key derivation.
+        password: Single password (no username).
+        users: Dict of {username: password} for multi-user wrapping.
+
+    Returns:
+        List of dicts, each with base64 ``iv`` and ``ct`` strings.
+    """
+    credentials: list[tuple[str, str | None]] = []
+    if users:
+        credentials = [(pwd, uname) for uname, pwd in users.items()]
+    else:
+        credentials = [(password, None)]
+
+    keys: list[dict[str, str]] = []
+    for pwd, uname in credentials:
+        secret = _build_secret(pwd, uname)
+        wrapping_key = _derive_key(secret, salt)
+        wrap_iv, wrap_ct = _wrap_key(cek, wrapping_key)
+        keys.append(
+            {
+                "iv": base64.b64encode(wrap_iv).decode("ascii"),
+                "ct": base64.b64encode(wrap_ct).decode("ascii"),
+            }
+        )
+    return keys
+
+
+def _try_unwrap_cek(
+    keys_list: list[dict], wrapping_key: bytes
+) -> bytes | None:
+    """Try to unwrap a CEK from a list of key blobs.
+
+    Iterates through key blobs attempting to unwrap with the given
+    wrapping key. Returns the first successful result.
+
+    Args:
+        keys_list: List of key blob dicts with base64 ``iv`` and ``ct``.
+        wrapping_key: Derived wrapping key to try.
+
+    Returns:
+        The unwrapped CEK bytes, or None if no blob matched.
+    """
+    for key_blob in keys_list:
+        try:
+            blob_iv = base64.b64decode(key_blob["iv"])
+            blob_ct = base64.b64decode(key_blob["ct"])
+        except Exception:
+            continue
+        result = _unwrap_key(blob_iv, blob_ct, wrapping_key)
+        if result is not None:
+            return result
+    return None
 
 
 def encrypt(
@@ -141,29 +207,7 @@ def encrypt(
     content_ct = aesgcm.encrypt(content_iv, inner.encode("utf-8"), None)
 
     # Build key blobs
-    keys = []
-    if users:
-        for username, user_password in users.items():
-            secret = _build_secret(user_password, username)
-            wrapping_key = _derive_key(secret, salt)
-            wrap_iv, wrap_ct = _wrap_key(cek, wrapping_key)
-            keys.append(
-                {
-                    "iv": base64.b64encode(wrap_iv).decode("ascii"),
-                    "ct": base64.b64encode(wrap_ct).decode("ascii"),
-                }
-            )
-    else:
-        # Single password mode
-        secret = _build_secret(password)
-        wrapping_key = _derive_key(secret, salt)
-        wrap_iv, wrap_ct = _wrap_key(cek, wrapping_key)
-        keys.append(
-            {
-                "iv": base64.b64encode(wrap_iv).decode("ascii"),
-                "ct": base64.b64encode(wrap_ct).decode("ascii"),
-            }
-        )
+    keys = _wrap_cek_for_users(cek, salt, password=password, users=users)
 
     # Assemble v2 payload
     payload = {
@@ -239,18 +283,7 @@ def decrypt(
     wrapping_key = _derive_key(secret, salt)
 
     # Try each key blob
-    cek = None
-    for key_blob in keys_list:
-        try:
-            blob_iv = base64.b64decode(key_blob["iv"])
-            blob_ct = base64.b64decode(key_blob["ct"])
-        except Exception:
-            continue
-        result = _unwrap_key(blob_iv, blob_ct, wrapping_key)
-        if result is not None:
-            cek = result
-            break
-
+    cek = _try_unwrap_cek(keys_list, wrapping_key)
     if cek is None:
         raise PagevaultError("Decryption failed: wrong password or tampered ciphertext")
 
@@ -319,25 +352,13 @@ def rewrap_keys(
         for uname, upwd in old_users.items():
             secret = _build_secret(upwd, uname)
             wrapping_key = _derive_key(secret, salt)
-            for key_blob in keys_list:
-                blob_iv = base64.b64decode(key_blob["iv"])
-                blob_ct = base64.b64decode(key_blob["ct"])
-                result = _unwrap_key(blob_iv, blob_ct, wrapping_key)
-                if result is not None:
-                    cek = result
-                    break
+            cek = _try_unwrap_cek(keys_list, wrapping_key)
             if cek is not None:
                 break
     elif old_password is not None:
         secret = _build_secret(old_password, old_username)
         wrapping_key = _derive_key(secret, salt)
-        for key_blob in keys_list:
-            blob_iv = base64.b64decode(key_blob["iv"])
-            blob_ct = base64.b64decode(key_blob["ct"])
-            result = _unwrap_key(blob_iv, blob_ct, wrapping_key)
-            if result is not None:
-                cek = result
-                break
+        cek = _try_unwrap_cek(keys_list, wrapping_key)
     else:
         raise PagevaultError("Must provide old_password or old_users to recover CEK")
 
@@ -364,28 +385,9 @@ def rewrap_keys(
         raise PagevaultError("Must provide new_users or new_password for re-wrapping")
 
     # Build new key blobs
-    new_keys = []
-    if new_users:
-        for uname, upwd in new_users.items():
-            secret = _build_secret(upwd, uname)
-            wrapping_key = _derive_key(secret, salt)
-            wrap_iv, wrap_ct = _wrap_key(cek, wrapping_key)
-            new_keys.append(
-                {
-                    "iv": base64.b64encode(wrap_iv).decode("ascii"),
-                    "ct": base64.b64encode(wrap_ct).decode("ascii"),
-                }
-            )
-    else:
-        secret = _build_secret(new_password)
-        wrapping_key = _derive_key(secret, salt)
-        wrap_iv, wrap_ct = _wrap_key(cek, wrapping_key)
-        new_keys.append(
-            {
-                "iv": base64.b64encode(wrap_iv).decode("ascii"),
-                "ct": base64.b64encode(wrap_ct).decode("ascii"),
-            }
-        )
+    new_keys = _wrap_cek_for_users(
+        cek, salt, password=new_password, users=new_users
+    )
 
     # Assemble new payload
     payload = {
@@ -457,10 +459,7 @@ def pad_content(plaintext: str) -> str:
         return plaintext
 
     # Find next power of 2 >= length
-    target = 1
-    while target < length:
-        target <<= 1
-
+    target = 1 << (length - 1).bit_length()
     if target == length:
         return plaintext
 
@@ -478,12 +477,11 @@ def pad_content_bytes(data: bytes) -> bytes:
     Returns:
         Padded bytes (with null bytes appended).
     """
-    if len(data) == 0:
+    length = len(data)
+    if length == 0:
         return data
-    target = 1
-    while target < len(data):
-        target *= 2
-    return data + b"\x00" * (target - len(data))
+    target = 1 << (length - 1).bit_length()
+    return data + b"\x00" * (target - length)
 
 
 def inspect_payload(encrypted_payload: str) -> dict[str, Any]:
@@ -571,17 +569,7 @@ def verify_password(
     secret = _build_secret(password, username)
     wrapping_key = _derive_key(secret, salt)
 
-    for key_blob in keys_list:
-        try:
-            blob_iv = base64.b64decode(key_blob["iv"])
-            blob_ct = base64.b64decode(key_blob["ct"])
-        except Exception:
-            continue
-        result = _unwrap_key(blob_iv, blob_ct, wrapping_key)
-        if result is not None:
-            return True
-
-    return False
+    return _try_unwrap_cek(keys_list, wrapping_key) is not None
 
 
 def content_hash(content: str) -> str:
@@ -688,28 +676,7 @@ def encrypt_chunked(
     iv_base = os.urandom(IV_LENGTH)
 
     # Wrap CEK for each user/password
-    keys: list[dict[str, str]] = []
-    if users:
-        for username, user_password in users.items():
-            secret = _build_secret(user_password, username)
-            wrapping_key = _derive_key(secret, salt)
-            wrap_iv, wrap_ct = _wrap_key(cek, wrapping_key)
-            keys.append(
-                {
-                    "iv": base64.b64encode(wrap_iv).decode("ascii"),
-                    "ct": base64.b64encode(wrap_ct).decode("ascii"),
-                }
-            )
-    else:
-        secret = _build_secret(password)
-        wrapping_key = _derive_key(secret, salt)
-        wrap_iv, wrap_ct = _wrap_key(cek, wrapping_key)
-        keys.append(
-            {
-                "iv": base64.b64encode(wrap_iv).decode("ascii"),
-                "ct": base64.b64encode(wrap_ct).decode("ascii"),
-            }
-        )
+    keys = _wrap_cek_for_users(cek, salt, password=password, users=users)
 
     aesgcm = AESGCM(cek)
 
@@ -719,15 +686,13 @@ def encrypt_chunked(
     meta_ct = aesgcm.encrypt(meta_iv, meta_json, None)
 
     # Encrypt data chunks
-    chunk_b64_list: list[str] = []
     total_size = len(data)
-
-    if total_size > 0:
-        for i in range(0, total_size, chunk_size):
-            chunk_data = data[i : i + chunk_size]
-            chunk_iv = _derive_chunk_iv(iv_base, i // chunk_size)
-            chunk_ct = aesgcm.encrypt(chunk_iv, chunk_data, None)
-            chunk_b64_list.append(base64.b64encode(chunk_ct).decode("ascii"))
+    chunk_b64_list: list[str] = []
+    for i in range(0, total_size, chunk_size):
+        chunk_data = data[i : i + chunk_size]
+        chunk_iv = _derive_chunk_iv(iv_base, i // chunk_size)
+        chunk_ct = aesgcm.encrypt(chunk_iv, chunk_data, None)
+        chunk_b64_list.append(base64.b64encode(chunk_ct).decode("ascii"))
 
     chunk_count = len(chunk_b64_list)
     if chunk_count >= 2**32:
@@ -786,18 +751,7 @@ def decrypt_chunked(
     wrapping_key = _derive_key(secret, salt)
 
     # Try each key blob to unwrap CEK
-    cek = None
-    for key_blob in envelope.get("keys", []):
-        try:
-            blob_iv = base64.b64decode(key_blob["iv"])
-            blob_ct = base64.b64decode(key_blob["ct"])
-        except Exception:
-            continue
-        result = _unwrap_key(blob_iv, blob_ct, wrapping_key)
-        if result is not None:
-            cek = result
-            break
-
+    cek = _try_unwrap_cek(envelope.get("keys", []), wrapping_key)
     if cek is None:
         raise PagevaultError("Decryption failed: wrong password or tampered ciphertext")
 
@@ -815,7 +769,7 @@ def decrypt_chunked(
     try:
         iv_base = base64.b64decode(envelope["iv_base"])
         total_size = envelope["total_size"]
-    except (KeyError, Exception) as e:
+    except Exception as e:
         raise PagevaultError(f"Missing required envelope field: {e}") from e
 
     if total_size == 0:
@@ -891,12 +845,4 @@ def verify_password_v3(
     secret = _build_secret(password, username)
     wrapping_key = _derive_key(secret, salt)
 
-    for key_blob in envelope.get("keys", []):
-        try:
-            blob_iv = base64.b64decode(key_blob["iv"])
-            blob_ct = base64.b64decode(key_blob["ct"])
-        except Exception:
-            continue
-        if _unwrap_key(blob_iv, blob_ct, wrapping_key) is not None:
-            return True
-    return False
+    return _try_unwrap_cek(envelope.get("keys", []), wrapping_key) is not None

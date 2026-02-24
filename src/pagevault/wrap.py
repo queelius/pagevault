@@ -618,6 +618,45 @@ def _escape_for_script_block(s: str) -> str:
     return s.replace("</", "<\\/")
 
 
+def _build_viewer_dispatch(viewers: list) -> tuple[str, str]:
+    """Build JS viewer variable definitions and dispatch table entries.
+
+    Validates each viewer's name and MIME types against strict regexes
+    (defense-in-depth), escapes JS output to prevent ``</script>`` breakout,
+    and returns the two JS code fragments needed by renderer IIFEs.
+
+    Args:
+        viewers: Active ViewerPlugin instances.
+
+    Returns:
+        Tuple of (viewer_defs, dispatch_table) as JS code strings.
+    """
+    viewer_defs_parts: list[str] = []
+    dispatch_entries: list[str] = []
+
+    for viewer in viewers:
+        if not _SAFE_NAME_RE.match(viewer.name):
+            logger.warning("Skipping viewer with unsafe name: %r", viewer.name)
+            continue
+        # for/else: else runs only if no break (all MIME types passed)
+        for mt in viewer.mime_types:
+            if not _SAFE_MIME_RE.match(mt):
+                logger.warning(
+                    "Skipping viewer %r: unsafe MIME type %r",
+                    viewer.name,
+                    mt,
+                )
+                break
+        else:
+            var_name = "__pv_" + viewer.name
+            safe_js = _escape_for_script_block(viewer.js())
+            viewer_defs_parts.append("  var " + var_name + " = " + safe_js + ";")
+            for mime_type in viewer.mime_types:
+                dispatch_entries.append("    '" + mime_type + "': " + var_name)
+
+    return "\n\n".join(viewer_defs_parts), ",\n".join(dispatch_entries)
+
+
 def _get_renderer_js(viewers: list) -> str:  # noqa: E501
     """Generate the file renderer JS with viewer dispatch table.
 
@@ -632,37 +671,9 @@ def _get_renderer_js(viewers: list) -> str:  # noqa: E501
     - Viewer js() output: escaped via _escape_for_script_block() to prevent
       </script> breakout.
     """
-    # Build viewer variable definitions and dispatch table entries.
     # Viewer JS is injected via f-string substitution — literal braces
     # inside the viewer function bodies pass through correctly.
-    viewer_defs_parts = []
-    dispatch_entries = []
-
-    for viewer in viewers:
-        # Defense-in-depth: re-validate at injection boundary.
-        # Skip the entire viewer if name or any MIME type is unsafe.
-        if not _SAFE_NAME_RE.match(viewer.name):
-            logger.warning("Skipping viewer with unsafe name: %r", viewer.name)
-            continue
-        # for/else: else runs only if no break (all MIME types passed)
-        for mt in viewer.mime_types:
-            if not _SAFE_MIME_RE.match(mt):
-                logger.warning(
-                    "Skipping viewer %r: unsafe MIME type %r",
-                    viewer.name,
-                    mt,
-                )
-                break
-        else:
-            # All MIME types validated — safe to inject this viewer
-            var_name = "__pv_" + viewer.name
-            safe_js = _escape_for_script_block(viewer.js())
-            viewer_defs_parts.append("  var " + var_name + " = " + safe_js + ";")
-            for mime_type in viewer.mime_types:
-                dispatch_entries.append("    '" + mime_type + "': " + var_name)
-
-    viewer_defs = "\n\n".join(viewer_defs_parts)
-    dispatch_table = ",\n".join(dispatch_entries)
+    viewer_defs, dispatch_table = _build_viewer_dispatch(viewers)
 
     # The framework IIFE uses f-strings: {{ }} produce literal { } in JS output.
     # {viewer_defs} and {dispatch_table} are Python substitutions whose
@@ -1086,32 +1097,7 @@ def _get_renderer_js_v3(viewers: list) -> str:  # noqa: E501
     - Viewer js() output: escaped via ``_escape_for_script_block()`` to prevent
       ``</script>`` breakout.
     """
-    # Build viewer variable definitions and dispatch table entries.
-    viewer_defs_parts = []
-    dispatch_entries = []
-
-    for viewer in viewers:
-        # Defense-in-depth: re-validate at injection boundary.
-        if not _SAFE_NAME_RE.match(viewer.name):
-            logger.warning("Skipping viewer with unsafe name: %r", viewer.name)
-            continue
-        for mt in viewer.mime_types:
-            if not _SAFE_MIME_RE.match(mt):
-                logger.warning(
-                    "Skipping viewer %r: unsafe MIME type %r",
-                    viewer.name,
-                    mt,
-                )
-                break
-        else:
-            var_name = "__pv_" + viewer.name
-            safe_js = _escape_for_script_block(viewer.js())
-            viewer_defs_parts.append("  var " + var_name + " = " + safe_js + ";")
-            for mime_type in viewer.mime_types:
-                dispatch_entries.append("    '" + mime_type + "': " + var_name)
-
-    viewer_defs = "\n\n".join(viewer_defs_parts)
-    dispatch_table = ",\n".join(dispatch_entries)
+    viewer_defs, dispatch_table = _build_viewer_dispatch(viewers)
 
     return f"""
 // pagevault v3 chunked renderer
