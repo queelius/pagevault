@@ -1,6 +1,7 @@
 """Tests for pagevault.config module."""
 
 import pytest
+import yaml
 
 from pagevault.config import (
     CONFIG_FILENAME,
@@ -9,8 +10,11 @@ from pagevault.config import (
     TemplateConfig,
     config_to_dict,
     create_default_config,
+    create_global_config,
     find_config_file,
+    get_global_config_path,
     load_config,
+    load_global_config,
     update_config_users,
 )
 from pagevault.crypto import PagevaultError, generate_salt, salt_to_hex
@@ -197,11 +201,11 @@ class TestConfigToDict:
     """Tests for config_to_dict function."""
 
     def test_masks_password(self):
-        """Test password is masked in output."""
+        """Test password is masked in output (first 2 chars + ***)."""
         config = PagevaultConfig(password="secret")
         data = config_to_dict(config)
 
-        assert data["password"] == "********"
+        assert data["password"] == "se***"
 
     def test_none_password(self):
         """Test None password shows as None."""
@@ -294,7 +298,7 @@ users:
         """Test that config_to_dict masks all user passwords."""
         config = PagevaultConfig(users={"alice": "pw"})
         data = config_to_dict(config)
-        assert data["users"] == {"alice": "********"}
+        assert data["users"] == {"alice": "***"}  # short password fully masked
 
     def test_config_to_dict_includes_managed(self):
         """Test that config_to_dict includes managed patterns."""
@@ -494,3 +498,270 @@ users:
         """Test that a nonexistent file raises PagevaultError."""
         with pytest.raises(PagevaultError, match="Cannot read"):
             update_config_users(tmp_path / "nonexistent.yaml", {"alice": "pw"})
+
+
+# =============================================================================
+# Global config tests
+# =============================================================================
+
+
+class TestGlobalConfig:
+    """Tests for global config loading and merging."""
+
+    def _setup_global(
+        self, tmp_path, monkeypatch, users=None, password=None, user=None, extra=None
+    ):
+        """Create global config and point XDG_CONFIG_HOME at tmp_path."""
+        config_home = tmp_path / "xdg_config"
+        config_home.mkdir()
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        global_dir = config_home / "pagevault"
+        global_dir.mkdir()
+        global_path = global_dir / "config.yaml"
+
+        data = {}
+        if users:
+            data["users"] = users
+        if password:
+            data["password"] = password
+        if user:
+            data["user"] = user
+        if extra:
+            data.update(extra)
+
+        global_path.write_text(
+            yaml.dump(data, default_flow_style=False), encoding="utf-8"
+        )
+        return global_path
+
+    def _create_local(self, tmp_path, **kwargs):
+        """Create local .pagevault.yaml."""
+        config_path = tmp_path / CONFIG_FILENAME
+        data = {"salt": "0123456789abcdef0123456789abcdef"}
+        data.update(kwargs)
+        config_path.write_text(
+            yaml.dump(data, default_flow_style=False), encoding="utf-8"
+        )
+        return config_path
+
+    def test_no_global_config(self, tmp_path, monkeypatch):
+        """load_config works fine without global config."""
+        config_home = tmp_path / "xdg_config"
+        config_home.mkdir()
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        local = self._create_local(tmp_path, password="test")
+        config = load_config(config_path=local)
+        assert config.password == "test"
+
+    def test_global_users_merged(self, tmp_path, monkeypatch):
+        """Global users are merged into local config."""
+        self._setup_global(tmp_path, monkeypatch, users={"carol": "carol-global"})
+        local = self._create_local(
+            tmp_path, password="test", users={"alice": "alice-local"}
+        )
+
+        config = load_config(config_path=local)
+        assert "alice" in config.users
+        assert "carol" in config.users
+        assert config.users["carol"] == "carol-global"
+
+    def test_local_user_overrides_global(self, tmp_path, monkeypatch):
+        """When same username in both, local password wins."""
+        self._setup_global(
+            tmp_path, monkeypatch, users={"alice": "global-password"}
+        )
+        local = self._create_local(
+            tmp_path, password="test", users={"alice": "local-password"}
+        )
+
+        config = load_config(config_path=local)
+        assert config.users["alice"] == "local-password"
+
+    def test_global_password_as_fallback(self, tmp_path, monkeypatch):
+        """Global password used when local doesn't have one."""
+        self._setup_global(tmp_path, monkeypatch, password="global-pass")
+        local = self._create_local(tmp_path)  # no password
+
+        config = load_config(config_path=local)
+        assert config.password == "global-pass"
+
+    def test_local_password_overrides_global(self, tmp_path, monkeypatch):
+        """Local password takes precedence over global."""
+        self._setup_global(tmp_path, monkeypatch, password="global-pass")
+        local = self._create_local(tmp_path, password="local-pass")
+
+        config = load_config(config_path=local)
+        assert config.password == "local-pass"
+
+    def test_global_default_user(self, tmp_path, monkeypatch):
+        """Global default user is used as fallback."""
+        self._setup_global(
+            tmp_path, monkeypatch,
+            users={"alice": "pass"},
+            user="alice",
+        )
+        local = self._create_local(tmp_path, password="test")
+
+        config = load_config(config_path=local)
+        assert config.user == "alice"
+
+    def test_load_global_config_returns_empty(self, tmp_path, monkeypatch):
+        """load_global_config returns {} when no global config exists."""
+        config_home = tmp_path / "xdg_config"
+        config_home.mkdir()
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        result = load_global_config()
+        assert result == {}
+
+    def test_global_invalid_username_rejected(self, tmp_path, monkeypatch):
+        """Global config with ':' in username raises error."""
+        self._setup_global(tmp_path, monkeypatch, users={"bad:name": "pass"})
+
+        with pytest.raises(PagevaultError, match="cannot contain ':'"):
+            load_global_config()
+
+    def test_password_conflict_warning(self, tmp_path, monkeypatch, capsys):
+        """Warns when same user has different passwords in global and local."""
+        self._setup_global(
+            tmp_path, monkeypatch, users={"alice": "global-pw"}
+        )
+        local = self._create_local(
+            tmp_path, password="test", users={"alice": "local-pw"}
+        )
+
+        config = load_config(config_path=local)
+        assert config.users["alice"] == "local-pw"  # local wins
+        captured = capsys.readouterr()
+        assert "different passwords" in captured.err
+
+    def test_no_warning_same_password(self, tmp_path, monkeypatch, capsys):
+        """No warning when same user has same password in both."""
+        self._setup_global(
+            tmp_path, monkeypatch, users={"alice": "same-pw"}
+        )
+        local = self._create_local(
+            tmp_path, password="test", users={"alice": "same-pw"}
+        )
+
+        load_config(config_path=local)
+        captured = capsys.readouterr()
+        assert "different passwords" not in captured.err
+
+    def test_global_salt_as_fallback(self, tmp_path, monkeypatch):
+        """Global salt is used when local config has no salt."""
+        salt_hex = "0123456789abcdef0123456789abcdef"
+        self._setup_global(
+            tmp_path, monkeypatch,
+            password="test",
+            extra={"salt": salt_hex},
+        )
+        # Local config without salt
+        local = self._create_local(tmp_path)
+        # Remove salt from local (it was added by _create_local)
+        data = yaml.safe_load(local.read_text())
+        del data["salt"]
+        local.write_text(yaml.dump(data, default_flow_style=False))
+
+        config = load_config(config_path=local)
+        assert config.salt is not None
+        assert salt_to_hex(config.salt) == salt_hex
+
+    def test_local_salt_overrides_global(self, tmp_path, monkeypatch):
+        """Local salt takes precedence over global salt."""
+        global_salt = "abcdef0123456789abcdef0123456789"
+        local_salt = "0123456789abcdef0123456789abcdef"
+        self._setup_global(
+            tmp_path, monkeypatch,
+            password="test",
+            extra={"salt": global_salt},
+        )
+        local = self._create_local(tmp_path, salt=local_salt)
+
+        config = load_config(config_path=local)
+        assert salt_to_hex(config.salt) == local_salt
+
+    def test_global_config_full_structure(self, tmp_path, monkeypatch):
+        """Global config can have full structure (same as local)."""
+        self._setup_global(
+            tmp_path, monkeypatch,
+            password="global-pass",
+            users={"alice": "pw"},
+            extra={
+                "salt": "0123456789abcdef0123456789abcdef",
+                "defaults": {"remember": "local", "remember_days": 30},
+            },
+        )
+        # No local config, load via search (won't find one)
+        config = load_config(start_path=tmp_path)
+        assert config.password == "global-pass"
+        assert config.users == {"alice": "pw"}
+
+
+class TestCreateGlobalConfig:
+    """Tests for create_global_config function."""
+
+    def test_creates_global_config(self, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        config_home.mkdir()
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        path = create_global_config(users={"alice": "pass"})
+        assert path.exists()
+
+        data = yaml.safe_load(path.read_text())
+        assert data["users"]["alice"] == "pass"
+
+    def test_refuses_overwrite(self, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text("password: old\n")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        with pytest.raises(PagevaultError, match="already exists"):
+            create_global_config(users={"alice": "pass"})
+
+    def test_force_overwrites(self, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        pv_dir = config_home / "pagevault"
+        pv_dir.mkdir(parents=True)
+        (pv_dir / "config.yaml").write_text("password: old\n")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        path = create_global_config(users={"alice": "new"}, force=True)
+        data = yaml.safe_load(path.read_text())
+        assert data["users"]["alice"] == "new"
+
+    def test_with_default_user(self, tmp_path, monkeypatch):
+        config_home = tmp_path / "xdg_config"
+        config_home.mkdir()
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+        create_global_config(
+            users={"alice": "pass"}, default_user="alice"
+        )
+        data = yaml.safe_load(get_global_config_path().read_text())
+        assert data["user"] == "alice"
+
+
+class TestConfigToDictShowPasswords:
+    """Tests for config_to_dict show_passwords parameter."""
+
+    def test_show_passwords_reveals_all(self):
+        config = PagevaultConfig(
+            password="secret", users={"alice": "alice-pass"}
+        )
+        data = config_to_dict(config, show_passwords=True)
+        assert data["password"] == "secret"
+        assert data["users"]["alice"] == "alice-pass"
+
+    def test_default_masks_passwords(self):
+        config = PagevaultConfig(
+            password="secret", users={"alice": "alice-pass"}
+        )
+        data = config_to_dict(config)
+        assert data["password"] == "se***"
+        assert data["users"]["alice"] == "al***"

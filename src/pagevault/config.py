@@ -5,6 +5,7 @@ environment variable overrides, and default values.
 """
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,8 @@ import yaml
 from .crypto import PagevaultError, generate_salt, hex_to_salt, salt_to_hex
 
 CONFIG_FILENAME = ".pagevault.yaml"
+GLOBAL_CONFIG_DIR = "pagevault"
+GLOBAL_CONFIG_FILE = "config.yaml"
 ENV_PASSWORD = "PAGEVAULT_PASSWORD"
 ENV_SALT = "PAGEVAULT_SALT"
 
@@ -105,6 +108,57 @@ class PagevaultConfig:
 LockhtmlConfig = PagevaultConfig
 
 
+def get_global_config_path() -> Path:
+    """Return the global config file path.
+
+    Uses $XDG_CONFIG_HOME/pagevault/config.yaml if XDG_CONFIG_HOME is set,
+    otherwise ~/.config/pagevault/config.yaml.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        base = Path(xdg)
+    else:
+        base = Path.home() / ".config"
+    return base / GLOBAL_CONFIG_DIR / GLOBAL_CONFIG_FILE
+
+
+def load_global_config() -> dict[str, Any]:
+    """Load global config if it exists, otherwise return empty dict.
+
+    The global config has the same structure as the local config, just lower
+    priority. Any field is valid in the global config; local values override
+    global values.
+
+    Returns:
+        Raw config dict from global file, or empty dict if not found.
+    """
+    path = get_global_config_path()
+    if not path.exists():
+        return {}
+
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+    except (yaml.YAMLError, OSError):
+        return {}
+
+    # Basic validation of global users
+    users = data.get("users")
+    if users and isinstance(users, dict):
+        for username, password in users.items():
+            if ":" in str(username):
+                raise PagevaultError(
+                    f"Global config: username '{username}' cannot contain ':'"
+                )
+            if not password:
+                raise PagevaultError(
+                    f"Global config: password for user '{username}' cannot be empty"
+                )
+        data["users"] = {str(k): str(v) for k, v in users.items()}
+
+    return data
+
+
 def find_config_file(start_path: Path | None = None) -> Path | None:
     """Find .pagevault.yaml by traversing up from start_path.
 
@@ -146,8 +200,12 @@ def load_config(
     Priority (highest to lowest):
     1. Function arguments (password_override)
     2. Environment variables (PAGEVAULT_PASSWORD, PAGEVAULT_SALT)
-    3. Config file (.pagevault.yaml)
-    4. Defaults
+    3. Local config file (.pagevault.yaml)
+    4. Global config (~/.config/pagevault/config.yaml)
+    5. Defaults
+
+    Global config provides personal credentials (users, password) that are
+    merged into every project. Local users override global users on conflict.
 
     Args:
         config_path: Explicit path to config file. If None, searches.
@@ -171,6 +229,41 @@ def load_config(
     if config_path is not None:
         config = _load_config_file(config_path)
         config.config_path = config_path
+
+    # Merge global config (global provides defaults, local overrides)
+    global_data = load_global_config()
+    if global_data:
+        # Merge users: global first, local overrides
+        global_users = global_data.get("users", {})
+        if global_users:
+            if config.users:
+                # Warn about password conflicts
+                for username in global_users:
+                    if (
+                        username in config.users
+                        and str(global_users[username])
+                        != str(config.users[username])
+                    ):
+                        print(
+                            f"Note: user '{username}' has different passwords in "
+                            f"global and local config (using local)",
+                            file=sys.stderr,
+                        )
+                config.users = {**global_users, **config.users}
+            else:
+                config.users = dict(global_users)
+
+        # Global password as fallback
+        if config.password is None and "password" in global_data:
+            config.password = str(global_data["password"])
+
+        # Global default user as fallback
+        if config.user is None and "user" in global_data:
+            config.user = str(global_data["user"])
+
+        # Global salt as fallback
+        if config.salt is None and "salt" in global_data:
+            config.salt = hex_to_salt(str(global_data["salt"]))
 
     # Override with environment variables
     env_password = os.environ.get(ENV_PASSWORD)
@@ -361,6 +454,53 @@ template:
     return config_path
 
 
+def create_global_config(
+    users: dict[str, str],
+    password: str | None = None,
+    default_user: str | None = None,
+    force: bool = False,
+) -> Path:
+    """Create a global pagevault config file.
+
+    Args:
+        users: Dict of {username: password} for personal credentials.
+        password: Optional single-user password.
+        default_user: Optional default username.
+        force: If True, overwrite existing global config.
+
+    Returns:
+        Path to created config file.
+
+    Raises:
+        PagevaultError: If file already exists (without force) or cannot be written.
+    """
+    global_path = get_global_config_path()
+
+    if global_path.exists() and not force:
+        raise PagevaultError(f"Global config already exists: {global_path}")
+
+    data: dict[str, Any] = {}
+    if password:
+        data["password"] = password
+    if users:
+        data["users"] = users
+    if default_user:
+        data["user"] = default_user
+
+    global_path.parent.mkdir(parents=True, exist_ok=True)
+
+    content = "# pagevault global configuration\n"
+    content += "# Personal credentials merged into every project's config.\n\n"
+    content += yaml.dump(data, default_flow_style=False, sort_keys=False)
+
+    try:
+        global_path.write_text(content, encoding="utf-8")
+    except OSError as e:
+        raise PagevaultError(f"Cannot write global config: {e}") from e
+
+    return global_path
+
+
 def update_config_users(config_path: Path, users: dict[str, str] | None) -> None:
     """Update the users section in a config file.
 
@@ -397,18 +537,29 @@ def update_config_users(config_path: Path, users: dict[str, str] | None) -> None
         raise PagevaultError(f"Cannot write config file {config_path}: {e}") from e
 
 
-def config_to_dict(config: PagevaultConfig) -> dict[str, Any]:
+def config_to_dict(
+    config: PagevaultConfig, show_passwords: bool = False
+) -> dict[str, Any]:
     """Convert config to dictionary for display.
 
-    Note: Passwords are masked for security.
+    Args:
+        config: Configuration to convert.
+        show_passwords: If True, show passwords in plaintext.
+            If False, mask with first 2 chars + "***".
     """
+
+    def _mask(password: str) -> str:
+        if show_passwords:
+            return password
+        return password[:2] + "***" if len(password) > 2 else "***"
+
     result: dict[str, Any] = {
-        "password": "********" if config.password else None,
+        "password": _mask(config.password) if config.password else None,
         "salt": salt_to_hex(config.salt) if config.salt else None,
     }
 
     if config.users:
-        result["users"] = {k: "********" for k in config.users}
+        result["users"] = {k: _mask(v) for k, v in config.users.items()}
     else:
         result["users"] = None
 
