@@ -12,6 +12,7 @@ from pagevault.crypto import PagevaultError
 from pagevault.viewers import discover_viewers
 from pagevault.wrap import (
     _generate_wrap_html_v3,
+    _get_progress_css,
     _get_renderer_js,
     _get_site_renderer_js,
     _get_wrap_css,
@@ -763,6 +764,20 @@ class TestViewerToolbar:
         assert ".pagevault-toolbar" in css
         assert ".toolbar-filename" in css
         assert ".toolbar-btn" in css
+
+    def test_wrap_css_dark_mode(self):
+        """Wrap CSS should contain dark mode media query."""
+        from pagevault.config import TemplateConfig
+
+        css = _get_wrap_css(TemplateConfig())
+        assert "prefers-color-scheme: dark" in css
+        assert "#1e1e2e" in css  # dark container bg
+
+    def test_progress_css_dark_mode(self):
+        """Progress bar CSS should contain dark mode media query."""
+        css = _get_progress_css()
+        assert "prefers-color-scheme: dark" in css
+        assert "#2a2a3a" in css  # dark track bg
 
 
 class TestImageViewer:

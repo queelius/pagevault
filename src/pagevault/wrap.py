@@ -531,6 +531,20 @@ pagevault[data-decrypted] {{
 
 /* Site viewer */
 .pagevault-site-frame {{ width: 100%; height: 100vh; border: none; }}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {{
+  body {{ background: #1a1a2a; color: #e0e0e0; }}
+  .pagevault-container {{ background: #1e1e2e; border-color: #444; }}
+  .pagevault-title {{ color: #e0e0e0; }}
+  .pagevault-hint {{ color: #999; }}
+  .pagevault-filename {{ color: #777; }}
+  .pagevault-input {{ background: #2a2a3a; border-color: #555; color: #e0e0e0; }}
+  .pagevault-toolbar {{ background: #252535; border-bottom-color: #444; }}
+  .toolbar-filename {{ color: #e0e0e0; }}
+  .toolbar-size {{ color: #999; }}
+  .pagevault-download .file-info {{ color: #999; }}
+}}
 """
 
 
@@ -861,6 +875,11 @@ def _get_progress_css() -> str:
   font-size: 0.75rem;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .pagevault-progress { background: #2a2a3a; }
 }
 """
 

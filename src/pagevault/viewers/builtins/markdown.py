@@ -143,4 +143,17 @@ _MARKDOWN_CSS = """
   padding: 2rem;
   background: #f5f5f5;
   min-height: calc(100vh - 40px);
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .markdown-body { color: #e0e0e0; }
+  .markdown-body h1, .markdown-body h2 { border-bottom-color: #444; }
+  .markdown-body th, .markdown-body td { border-color: #444; }
+  .markdown-body th { background: #2a2a3a; }
+  .markdown-body code { background: #2a2a3a; }
+  .markdown-body pre { background: #2a2a3a; }
+  .markdown-body blockquote { border-left-color: #555; color: #999; }
+  .markdown-body hr { border-top-color: #444; }
+  .markdown-source pre { background: #1a1a2a; color: #e0e0e0; }
 }"""

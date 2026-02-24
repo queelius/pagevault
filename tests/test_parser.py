@@ -552,6 +552,12 @@ class TestTemplateCustomization:
         # Config CSS should NOT be used
         assert ".config-class" not in result
 
+    def test_dark_mode_css(self):
+        """Default CSS should contain dark mode media query."""
+        html = "<pagevault>Secret</pagevault>"
+        result = lock_html(html, "password")
+        assert "prefers-color-scheme: dark" in result
+
 
 class TestContentHashIntegrity:
     """Tests for content hash storage and verification."""

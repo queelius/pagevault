@@ -3451,3 +3451,154 @@ class TestCheckV3:
         result = runner.invoke(main, ["check", str(out_path), "-p", "site-pw"])
         assert "correct" in result.output.lower()
         assert result.exit_code == 0
+
+
+class TestServeCommand:
+    """Tests for pagevault serve command."""
+
+    def test_serve_help(self, runner):
+        """Serve --help should show usage."""
+        result = runner.invoke(main, ["serve", "--help"])
+        assert result.exit_code == 0
+        assert "Serve directory" in result.output
+        assert "--port" in result.output
+        assert "--open" in result.output
+
+    def test_serve_port_option(self, runner):
+        """Serve accepts -P for port."""
+        result = runner.invoke(main, ["serve", "--help"])
+        assert "-P" in result.output
+
+
+class TestCheckPrompt:
+    """Tests for check command interactive password prompt."""
+
+    def test_check_prompts_for_password(self, runner, tmp_path):
+        """Check without -p should prompt for password."""
+        html_path = tmp_path / "index.html"
+        html_path.write_text("""<!DOCTYPE html>
+<html><head><title>Test</title></head>
+<body><pagevault>Secret</pagevault></body>
+</html>""")
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(
+            'password: "test-password"\nsalt: "0123456789abcdef0123456789abcdef"\n'
+        )
+
+        locked_dir = tmp_path / "locked"
+        runner.invoke(
+            main,
+            ["lock", str(html_path), "-c", str(config_path), "-d", str(locked_dir)],
+        )
+
+        # Provide password via stdin (no -p flag)
+        result = runner.invoke(
+            main,
+            ["check", str(locked_dir / "index.html")],
+            input="test-password\n",
+        )
+        assert "correct" in result.output.lower()
+        assert result.exit_code == 0
+
+
+class TestUsersFilter:
+    """Tests for lock --users flag."""
+
+    def test_users_filter(self, runner, tmp_path):
+        """--users should filter configured users."""
+        html_path = tmp_path / "index.html"
+        html_path.write_text("""<!DOCTYPE html>
+<html><head><title>Test</title></head>
+<body><pagevault>Secret</pagevault></body>
+</html>""")
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "salt": "0123456789abcdef0123456789abcdef",
+                    "users": {"alice": "pw-a", "bob": "pw-b", "charlie": "pw-c"},
+                }
+            )
+        )
+
+        locked_dir = tmp_path / "locked"
+        result = runner.invoke(
+            main,
+            [
+                "lock",
+                str(html_path),
+                "-c",
+                str(config_path),
+                "-d",
+                str(locked_dir),
+                "--users",
+                "alice,bob",
+            ],
+        )
+        assert result.exit_code == 0
+
+        # Verify alice's password works
+        check_result = runner.invoke(
+            main,
+            ["check", str(locked_dir / "index.html"), "-p", "pw-a", "-u", "alice"],
+        )
+        assert "correct" in check_result.output.lower()
+
+        # Verify charlie's password does NOT work (was filtered out)
+        check_result = runner.invoke(
+            main,
+            ["check", str(locked_dir / "index.html"), "-p", "pw-c", "-u", "charlie"],
+        )
+        assert "incorrect" in check_result.output.lower()
+
+    def test_users_filter_unknown_user(self, runner, tmp_path):
+        """--users with unknown username should error."""
+        html_path = tmp_path / "index.html"
+        html_path.write_text("""<!DOCTYPE html>
+<html><head><title>Test</title></head>
+<body><pagevault>Secret</pagevault></body>
+</html>""")
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "salt": "0123456789abcdef0123456789abcdef",
+                    "users": {"alice": "pw-a"},
+                }
+            )
+        )
+
+        result = runner.invoke(
+            main,
+            ["lock", str(html_path), "-c", str(config_path), "--users", "unknown"],
+        )
+        assert result.exit_code != 0
+        assert "Unknown user" in result.output
+
+    def test_users_filter_requires_multi_user(self, runner, tmp_path):
+        """--users without users config should error."""
+        html_path = tmp_path / "index.html"
+        html_path.write_text("""<!DOCTYPE html>
+<html><head><title>Test</title></head>
+<body><pagevault>Secret</pagevault></body>
+</html>""")
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "password": "single-pw",
+                    "salt": "0123456789abcdef0123456789abcdef",
+                }
+            )
+        )
+
+        result = runner.invoke(
+            main,
+            ["lock", str(html_path), "-c", str(config_path), "--users", "alice"],
+        )
+        assert result.exit_code != 0
+        assert "multi-user" in result.output.lower()

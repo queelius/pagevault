@@ -33,4 +33,9 @@ class AudioViewer(ViewerPlugin):
 .pagevault-audio-viewer audio {
   width: 100%;
   max-width: 600px;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .pagevault-audio-viewer { background: #1a1a2a; }
 }"""

@@ -653,6 +653,15 @@ pagevault[data-encrypted] {{
 .pagevault-remember input {{
   margin: 0;
 }}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {{
+  .pagevault-container {{ background: #1e1e2e; border-color: #444; }}
+  .pagevault-title {{ color: #e0e0e0; }}
+  .pagevault-hint {{ color: #999; }}
+  .pagevault-input {{ background: #2a2a3a; border-color: #555; color: #e0e0e0; }}
+  .pagevault-remember {{ color: #999; }}
+}}
 """
 
 

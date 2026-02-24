@@ -572,6 +572,12 @@ def _wrap_site_directory(
     is_flag=True,
     help="Force file-wrapping mode (encrypts entire file, including HTML head/title)",
 )
+@click.option(
+    "--users",
+    "user_filter",
+    default=None,
+    help="Comma-separated usernames to encrypt for (subset of configured users)",
+)
 def lock(
     paths,
     recursive,
@@ -590,6 +596,7 @@ def lock(
     entry,
     pad,
     wrap,
+    user_filter,
 ):
     """Encrypt files into password-protected HTML.
 
@@ -651,6 +658,18 @@ def lock(
         users, pwd = _resolve_password_and_users(config, password, username)
     except click.UsageError:
         raise
+
+    # 4b. Apply --users filter if specified
+    if user_filter:
+        if not users:
+            raise click.UsageError(
+                "--users requires multi-user config (users: section in config)"
+            )
+        requested = [u.strip() for u in user_filter.split(",")]
+        unknown = [u for u in requested if u not in users]
+        if unknown:
+            raise click.UsageError(f"Unknown user(s): {', '.join(unknown)}")
+        users = {u: users[u] for u in requested}
 
     # 5. Route to appropriate handler
     if mode == "lock_html":
@@ -1382,7 +1401,7 @@ def audit(config_path):
 
 @main.command()
 @click.argument("path", type=click.Path(exists=True))
-@click.option("-p", "--password", required=True, help="Password to verify")
+@click.option("-p", "--password", help="Password to verify (prompts if omitted)")
 @click.option("-u", "--username", help="Username for multi-user content")
 def check(path, password, username):
     """Verify a password against an encrypted file.
@@ -1396,7 +1415,10 @@ def check(path, password, username):
     Examples:
       pagevault check encrypted.html -p "test-password"
       pagevault check _locked/file.html -p "pw" -u alice
+      pagevault check encrypted.html              # prompts for password
     """
+    if not password:
+        password = click.prompt("Password", hide_input=True)
     from .crypto import verify_password
 
     file_path = Path(path)
@@ -2042,6 +2064,41 @@ def _relative_path(path: Path) -> str:
         return str(path.relative_to(Path.cwd()))
     except ValueError:
         return str(path)
+
+
+@main.command()
+@click.argument("directory", default=".", type=click.Path(exists=True))
+@click.option("-P", "--port", default=8765, type=int, help="Port number (default: 8765)")
+@click.option("-o", "--open", "open_browser", is_flag=True, help="Open browser automatically")
+def serve(directory, port, open_browser):
+    """Serve directory over local HTTP for previewing encrypted files.
+
+    Useful for testing encrypted HTML files that need HTTP (not file://) to work
+    correctly with Web Crypto API and blob URLs.
+
+    \b
+    Examples:
+      pagevault serve                     # Serve current directory on :8765
+      pagevault serve _locked/ -P 9000    # Serve _locked/ on port 9000
+      pagevault serve _locked/ --open     # Serve and open browser
+    """
+    import functools
+    import http.server
+    import webbrowser
+
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directory)
+    try:
+        with http.server.HTTPServer(("", port), handler) as httpd:
+            url = f"http://localhost:{port}"
+            click.echo(f"Serving {directory} at {url}")
+            click.echo("Press Ctrl+C to stop.")
+            if open_browser:
+                webbrowser.open(url)
+            httpd.serve_forever()
+    except KeyboardInterrupt:
+        click.echo("\nStopped.")
+    except OSError as e:
+        raise click.ClickException(f"Cannot start server: {e}")
 
 
 if __name__ == "__main__":

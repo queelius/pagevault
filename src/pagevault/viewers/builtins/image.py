@@ -44,4 +44,9 @@ class ImageViewer(ViewerPlugin):
   max-width: none;
   max-height: none;
   cursor: zoom-out;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .pagevault-image-viewer { background: #1a1a2a; }
 }"""

@@ -291,6 +291,10 @@ class TestImageViewer:
         assert "zoom-in" in css
         assert "zoom-out" in css
 
+    def test_css_dark_mode(self):
+        css = ImageViewer().css()
+        assert "prefers-color-scheme: dark" in css
+
     def test_no_dependencies(self):
         assert ImageViewer().dependencies() == []
 
@@ -354,6 +358,10 @@ class TestTextViewerPlugin:
         assert ".line-numbers" in css
         assert "user-select: none" in css
 
+    def test_css_dark_mode(self):
+        css = TextViewer().css()
+        assert "prefers-color-scheme: dark" in css
+
     def test_mime_types_include_wildcards(self):
         v = TextViewer()
         assert "text/*" in v.mime_types
@@ -392,6 +400,10 @@ class TestMarkdownViewerPlugin:
         css = MarkdownViewer().css()
         assert ".markdown-source" in css
 
+    def test_css_dark_mode(self):
+        css = MarkdownViewer().css()
+        assert "prefers-color-scheme: dark" in css
+
     def test_dependencies_returns_marked_js(self):
         deps = MarkdownViewer().dependencies()
         assert len(deps) == 1
@@ -424,6 +436,10 @@ class TestAudioViewer:
     def test_css_has_audio_styles(self):
         css = AudioViewer().css()
         assert ".pagevault-audio-viewer" in css
+
+    def test_css_dark_mode(self):
+        css = AudioViewer().css()
+        assert "prefers-color-scheme: dark" in css
 
     def test_no_dependencies(self):
         assert AudioViewer().dependencies() == []
