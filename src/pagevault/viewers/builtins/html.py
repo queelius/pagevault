@@ -1,15 +1,18 @@
-"""HTML viewer using sandboxed iframe."""
+"""HTML viewer using srcdoc iframe."""
 
 from pagevault.viewers.base import ViewerPlugin
 
 
 class HtmlViewer(ViewerPlugin):
-    """Viewer for HTML files using sandboxed iframe.
+    """Viewer for HTML files using srcdoc iframe.
 
-    The iframe has sandbox='allow-same-origin' but no allow-scripts.
-    This means the decrypted HTML is rendered as static content —
-    embedded scripts will NOT execute. For interactive HTML apps,
-    use ``pagevault lock --site`` instead.
+    Uses ``srcdoc`` instead of a blob URL so the iframe inherits the
+    parent document's origin.  This is critical for ``file://`` contexts
+    where blob URLs get an opaque ``null`` origin, breaking localStorage,
+    nested blob URLs, and other APIs that require a real origin.
+
+    No ``sandbox`` attribute is set because wrapped content is always
+    user-trusted (the user explicitly encrypted their own file).
     """
 
     name = "html"
@@ -19,8 +22,17 @@ class HtmlViewer(ViewerPlugin):
     def js(self) -> str:
         return """async function(container, blob, url, meta, toolbar) {
     var iframe = document.createElement('iframe');
-    iframe.sandbox = 'allow-same-origin';
-    iframe.src = url;
+    var text = await blob.text();
+    iframe.srcdoc = text;
+    iframe.addEventListener('load', function() {
+        try {
+            var h = iframe.contentWindow.history;
+            var ps = h.pushState.bind(h);
+            var rs = h.replaceState.bind(h);
+            h.pushState = function() { try { return ps.apply(h, arguments); } catch(e) {} };
+            h.replaceState = function() { try { return rs.apply(h, arguments); } catch(e) {} };
+        } catch(e) {}
+    });
     container.appendChild(iframe);
 }"""
 

@@ -1493,14 +1493,24 @@ def _get_site_renderer_js() -> str:
 
       // Track current page for relative path resolution
       var currentPage = entry;
-      var currentBlobUrl = null;
 
-      // Create iframe
+      // Create iframe — no sandbox (user-trusted content)
       container.innerHTML = '';
       var iframe = document.createElement('iframe');
       iframe.className = 'pagevault-site-frame';
-      iframe.sandbox = 'allow-scripts allow-same-origin';
       container.appendChild(iframe);
+
+      // Shim pushState/replaceState after iframe loads to prevent
+      // SecurityError when opened from file:// (srcdoc = about:srcdoc URL)
+      iframe.addEventListener('load', function() {
+        try {
+          var h = iframe.contentWindow.history;
+          var ps = h.pushState.bind(h);
+          var rs = h.replaceState.bind(h);
+          h.pushState = function() { try { return ps.apply(h, arguments); } catch(e) {} };
+          h.replaceState = function() { try { return rs.apply(h, arguments); } catch(e) {} };
+        } catch(e) {}
+      });
 
       function renderPage(pageName) {
         var html = getHtml(pageName);
@@ -1508,12 +1518,9 @@ def _get_site_renderer_js() -> str:
         currentPage = pageName;
         html = rewriteUrls(html, pageName);
         html = injectNavScript(html);
-        // Use blob URL (not srcdoc) so the iframe has a real URL context
-        // where location.hash, history.pushState, etc. work normally.
-        // Resources are already inlined as data URIs, so no cross-origin issue.
-        if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
-        currentBlobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-        iframe.src = currentBlobUrl;
+        // Use srcdoc so iframe inherits parent origin — needed for
+        // localStorage, blob URLs, etc. under file:// protocol.
+        iframe.srcdoc = html;
         return true;
       }
 

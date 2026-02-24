@@ -722,19 +722,30 @@ class TestScriptTagBreakout:
 # ─────────────────────────────────────────────────────────────────────
 
 
-class TestHtmlViewerSandbox:
-    """Tests that HtmlViewer iframe is sandboxed."""
+class TestHtmlViewerSrcdoc:
+    """Tests that HtmlViewer uses srcdoc (not blob URL)."""
 
-    def test_html_viewer_has_sandbox(self):
-        """HtmlViewer JS should set sandbox attribute on iframe."""
+    def test_html_viewer_uses_srcdoc(self):
+        """HtmlViewer JS should use iframe.srcdoc, not iframe.src."""
         js = HtmlViewer().js()
-        assert "sandbox" in js
-        assert "allow-same-origin" in js
+        assert "srcdoc" in js
+        assert "blob.text()" in js
 
-    def test_html_viewer_no_allow_scripts(self):
-        """HtmlViewer should NOT allow scripts (display-only)."""
+    def test_html_viewer_no_sandbox(self):
+        """HtmlViewer has no sandbox (user-trusted wrapped content)."""
         js = HtmlViewer().js()
-        assert "allow-scripts" not in js
+        assert "sandbox" not in js
+
+    def test_html_viewer_no_blob_url(self):
+        """HtmlViewer should not use blob URL (breaks file:// protocol)."""
+        js = HtmlViewer().js()
+        assert "iframe.src = url" not in js
+
+    def test_html_viewer_pushstate_shim(self):
+        """HtmlViewer shims pushState to prevent SecurityError in file://."""
+        js = HtmlViewer().js()
+        assert "pushState" in js
+        assert "replaceState" in js
 
     def test_pdf_viewer_no_sandbox(self):
         """PdfViewer does not need sandbox (PDF renderer is safe)."""
