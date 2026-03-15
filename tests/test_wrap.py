@@ -1507,3 +1507,19 @@ class TestCssImportRewriting:
         from pagevault.wrap import _get_site_renderer_js
         js = _get_site_renderer_js()
         assert "@import" in js
+
+
+class TestNavInterceptor:
+    """Tests for site renderer navigation interceptor."""
+
+    def test_form_submit_interceptor_present(self):
+        """Nav script should intercept form submissions."""
+        from pagevault.wrap import _get_site_renderer_js
+        js = _get_site_renderer_js()
+        assert '"submit"' in js
+
+    def test_target_blank_not_intercepted(self):
+        """Nav script should skip links with target=_blank."""
+        from pagevault.wrap import _get_site_renderer_js
+        js = _get_site_renderer_js()
+        assert "_blank" in js

@@ -1245,15 +1245,26 @@ def _get_site_renderer_js() -> str:
   function injectNavScript(html) {
     // Intercept clicks on internal links and forward to parent via postMessage.
     // Split 'script' tags to avoid closing the outer <script> in the wrapper HTML.
-    var tag = '<scr' + 'ipt>document.addEventListener("click",function(e){' +
+    var tag = '<scr' + 'ipt>' +
+      'document.addEventListener("click",function(e){' +
       'var a=e.target.closest("a");if(!a)return;' +
       'var h=a.getAttribute("href");' +
       'if(!h||h.startsWith("http://")||h.startsWith("https://")||' +
       'h.startsWith("//")||h.startsWith("#")||h.startsWith("data:")||' +
       'h.startsWith("javascript:")||h.startsWith("mailto:"))return;' +
+      'if(a.target==="_blank")return;' +
       'e.preventDefault();' +
       'window.parent.postMessage({type:"pagevault-nav",href:h},"*");' +
-      '});</scr' + 'ipt>';
+      '});' +
+      'document.addEventListener("submit",function(e){' +
+      'var f=e.target;if(!f||f.tagName!=="FORM")return;' +
+      'var a=f.getAttribute("action");' +
+      'if(!a||a.startsWith("http://")||a.startsWith("https://")||' +
+      'a.startsWith("//")||a.startsWith("data:"))return;' +
+      'e.preventDefault();' +
+      'window.parent.postMessage({type:"pagevault-nav",href:a},"*");' +
+      '});' +
+      '</scr' + 'ipt>';
     var idx = html.lastIndexOf('</body>');
     if (idx !== -1) return html.slice(0, idx) + tag + html.slice(idx);
     return html + tag;
