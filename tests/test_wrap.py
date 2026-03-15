@@ -1485,3 +1485,15 @@ class TestResolvePathAbsolute:
         output = wrap_site(site_dir, password="pw")
         content = output.read_text()
         assert "startsWith('/')" in content
+
+
+class TestSrcsetRewriting:
+    """Tests for srcset attribute URL rewriting in site renderer."""
+
+    def test_srcset_handling_in_renderer(self):
+        """Site renderer should have special srcset handling."""
+        from pagevault.wrap import _get_site_renderer_js
+        js = _get_site_renderer_js()
+        assert "srcset" in js.lower()
+        # Should split srcset entries on comma and process each URL
+        assert "split(',')" in js

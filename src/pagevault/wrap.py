@@ -1110,6 +1110,21 @@ def _get_site_renderer_js() -> str:
               url.startsWith('mailto:')) {
             return match;
           }
+          // Handle srcset: multiple URLs with descriptors
+          if (attr.toLowerCase() === 'srcset') {
+            var entries = url.split(',');
+            var rewritten = entries.map(function(entry) {
+              var parts = entry.trim().split(/\\s+/);
+              var src = parts[0];
+              var descriptor = parts.slice(1).join(' ');
+              var clean = src.split('#')[0].split('?')[0];
+              var resolved = resolvePath(fromPage, clean);
+              var uri = toDataUri(resolved);
+              if (uri) return uri + (descriptor ? ' ' + descriptor : '');
+              return entry.trim();
+            });
+            return attr + '=' + quote + rewritten.join(', ') + quote;
+          }
           var clean = url.split('#')[0].split('?')[0];
           var resolved = resolvePath(fromPage, clean);
           // Leave <a href> to HTML pages alone — nav interceptor handles them
