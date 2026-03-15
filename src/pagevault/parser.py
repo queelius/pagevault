@@ -558,6 +558,7 @@ def _get_css(template: TemplateConfig) -> str:
     """Generate CSS for the pagevault component."""
     return f"""
 /* pagevault styles */
+
 pagevault {{
   display: block;
 }}
@@ -988,14 +989,89 @@ def _get_javascript(template: TemplateConfig, defaults: DefaultsConfig) -> str:
       el.removeAttribute('data-content-hash');
       el.removeAttribute('data-mode');
       // Decrypted content is trusted — it was authenticated by AES-256-GCM
+      // (user encrypted their own content; AES-GCM provides authenticity)
       el.innerHTML = content;
       el._pvDecrypted = true;
 
-      // Dispatch event for scripts that need to know
-      el.dispatchEvent(new CustomEvent('pagevault:decrypted', {{
-        bubbles: true,
-        detail: {{ element: el, meta: meta }}
-      }}));
+      // === Script activation after decryption ===
+      // innerHTML doesn't execute <script> tags (HTML5 spec).
+      // Re-create each script so the browser executes it.
+      // Safe: content was authenticated by AES-256-GCM decryption.
+
+      // Neutralize document.write/writeln — they would destroy the page
+      // after DOMContentLoaded (safe: we restore them after activation)
+      var origWrite = document.write;
+      var origWriteln = document.writeln;
+      document.write = function() {{}};
+      document.writeln = function() {{}};
+
+      // Shim DOMContentLoaded — already fired, collect callbacks
+      var dcl = document.addEventListener;
+      var dclCallbacks = [];
+      document.addEventListener = function(type, fn, opts) {{
+        if (type === 'DOMContentLoaded') dclCallbacks.push(fn);
+        else dcl.call(document, type, fn, opts);
+      }};
+
+      // Shim window load event — already fired, collect callbacks
+      var wal = window.addEventListener;
+      var wlCallbacks = [];
+      window.addEventListener = function(type, fn, opts) {{
+        if (type === 'load') wlCallbacks.push(fn);
+        else wal.call(window, type, fn, opts);
+      }};
+
+      // Only re-execute scripts meant to run (not JSON data blocks)
+      function isExecutable(s) {{
+        var t = (s.getAttribute('type') || '').toLowerCase();
+        if (!t || t === 'text/javascript' || t === 'application/javascript' || t === 'module') return true;
+        return false;
+      }}
+
+      var scripts = Array.from(el.querySelectorAll('script'));
+
+      // Activate sequentially — external scripts must load before next runs
+      function activateNext(i) {{
+        if (i >= scripts.length) {{
+          // Restore originals
+          document.addEventListener = dcl;
+          window.addEventListener = wal;
+          document.write = origWrite;
+          document.writeln = origWriteln;
+          // Fire collected lifecycle callbacks
+          dclCallbacks.forEach(function(fn) {{
+            try {{ fn(); }} catch(e) {{ console.error('[pagevault] DOMContentLoaded callback error:', e); }}
+          }});
+          wlCallbacks.forEach(function(fn) {{
+            try {{ fn(); }} catch(e) {{ console.error('[pagevault] load callback error:', e); }}
+          }});
+          if (typeof window.onload === 'function') {{
+            try {{ window.onload(); }} catch(e) {{ console.error('[pagevault] onload error:', e); }}
+          }}
+          el.dispatchEvent(new CustomEvent('pagevault:decrypted', {{
+            bubbles: true,
+            detail: {{ element: el, meta: meta }}
+          }}));
+          return;
+        }}
+        var old = scripts[i];
+        if (!isExecutable(old)) {{ activateNext(i + 1); return; }}
+        var s = document.createElement('script');
+        for (var j = 0; j < old.attributes.length; j++) {{
+          var a = old.attributes[j];
+          if (a.name === 'type' && a.value.toLowerCase() === 'module' && !old.src) continue;
+          s.setAttribute(a.name, a.value);
+        }}
+        var hasSrc = old.hasAttribute('src');
+        if (!hasSrc && old.textContent) s.textContent = old.textContent;
+        if (hasSrc) {{
+          s.onload = function() {{ activateNext(i + 1); }};
+          s.onerror = function() {{ console.error('[pagevault] Failed to load:', old.src); activateNext(i + 1); }};
+        }}
+        old.parentNode.replaceChild(s, old);
+        if (!hasSrc) activateNext(i + 1);
+      }}
+      activateNext(0);
 
       return true;
     }}
