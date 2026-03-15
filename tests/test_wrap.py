@@ -13,7 +13,7 @@ from pagevault.viewers import discover_viewers
 from pagevault.wrap import (
     _generate_wrap_html_v3,
     _get_progress_css,
-    _get_renderer_js,
+    _get_renderer_js_v3,
     _get_site_renderer_js,
     _get_wrap_css,
     detect_mime,
@@ -733,7 +733,7 @@ class TestMarkdownToggle:
     def test_toggle_button_in_renderer(self):
         """Renderer JS should contain toggle button code via MarkdownViewer plugin."""
         viewers = discover_viewers()
-        js = _get_renderer_js(viewers)
+        js = _get_renderer_js_v3(viewers)
         assert "toolbar-toggle" in js
         assert "Source" in js
         assert "Rendered" in js
@@ -741,7 +741,7 @@ class TestMarkdownToggle:
     def test_simplemarkdown_fallback_preserved(self):
         """simpleMarkdown fallback should still exist in renderer via MarkdownViewer."""
         viewers = discover_viewers()
-        js = _get_renderer_js(viewers)
+        js = _get_renderer_js_v3(viewers)
         assert "simpleMarkdown" in js
 
 
@@ -751,7 +751,7 @@ class TestViewerToolbar:
     def test_create_toolbar_in_renderer(self):
         """Renderer JS should contain createToolbar function."""
         viewers = discover_viewers()
-        js = _get_renderer_js(viewers)
+        js = _get_renderer_js_v3(viewers)
         assert "createToolbar" in js
         assert "toolbar-filename" in js
         assert "toolbar-size" in js
@@ -786,14 +786,14 @@ class TestImageViewer:
     def test_image_viewer_in_dispatch_table(self):
         """Renderer JS should include image viewer in dispatch table."""
         viewers = discover_viewers()
-        js = _get_renderer_js(viewers)
+        js = _get_renderer_js_v3(viewers)
         assert "__pv_image" in js
         assert "'image/*'" in js
 
     def test_zoom_class_in_renderer(self):
         """Renderer JS should toggle 'zoomed' class (ImageViewer plugin)."""
         viewers = discover_viewers()
-        js = _get_renderer_js(viewers)
+        js = _get_renderer_js_v3(viewers)
         assert "zoomed" in js
 
     def test_image_zoom_css(self):
@@ -813,7 +813,7 @@ class TestTextViewer:
     def test_text_viewer_in_dispatch_table(self):
         """Renderer JS should include text viewer in dispatch table."""
         viewers = discover_viewers()
-        js = _get_renderer_js(viewers)
+        js = _get_renderer_js_v3(viewers)
         assert "__pv_text" in js
         assert "'text/*'" in js
 
@@ -1221,15 +1221,15 @@ class TestRendererXssPrevention:
     """Tests for XSS prevention in renderer JS functions."""
 
     def test_file_renderer_escapes_filename(self):
-        """Test _get_renderer_js() uses escapeHtml for filename display."""
+        """Test _get_renderer_js_v3() uses escapeHtml for filename display."""
         viewers = discover_viewers()
-        js = _get_renderer_js(viewers)
-        assert "escapeHtml(filename)" in js
+        js = _get_renderer_js_v3(viewers)
+        assert "escapeHtml(fname)" in js
 
     def test_file_renderer_has_escapehtml(self):
         """Test _get_renderer_js() defines escapeHtml."""
         viewers = discover_viewers()
-        js = _get_renderer_js(viewers)
+        js = _get_renderer_js_v3(viewers)
         assert "function escapeHtml" in js
 
     def test_site_renderer_escapes_entry(self):

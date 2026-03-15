@@ -703,7 +703,7 @@ class TestScriptTagBreakout:
 
     def test_viewer_js_with_script_close_is_escaped(self):
         """Viewer js() containing a closing script tag is escaped in renderer output."""
-        from pagevault.wrap import _get_renderer_js
+        from pagevault.wrap import _get_renderer_js_v3
 
         class TrickyViewer(ViewerPlugin):
             name = "tricky"
@@ -718,7 +718,7 @@ class TestScriptTagBreakout:
             def css(self):
                 return ""
 
-        js = _get_renderer_js([TrickyViewer()])
+        js = _get_renderer_js_v3([TrickyViewer()])
         assert "safe" in js
 
     def test_escape_function_neutralizes_closing_tags(self):
