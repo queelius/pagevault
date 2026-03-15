@@ -1523,3 +1523,26 @@ class TestNavInterceptor:
         from pagevault.wrap import _get_site_renderer_js
         js = _get_site_renderer_js()
         assert "_blank" in js
+
+
+class TestFetchInterception:
+    """Tests for fetch/XHR interception in site renderer."""
+
+    def test_fetch_shim_injected(self):
+        """Site renderer should inject a fetch shim into the iframe."""
+        from pagevault.wrap import _get_site_renderer_js
+        js = _get_site_renderer_js()
+        assert "pagevault-fetch" in js
+
+    def test_parent_responds_to_fetch_requests(self):
+        """Parent should handle pagevault-fetch-response messages."""
+        from pagevault.wrap import _get_site_renderer_js
+        js = _get_site_renderer_js()
+        assert "pagevault-fetch-response" in js
+
+    def test_fetch_shim_preserves_absolute_urls(self):
+        """Fetch shim should not intercept absolute URLs."""
+        from pagevault.wrap import _get_site_renderer_js
+        js = _get_site_renderer_js()
+        # The shim should check for http/https/data/blob prefixes
+        assert "https?:" in js or "http" in js

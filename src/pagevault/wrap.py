@@ -1212,15 +1212,36 @@ def _get_site_renderer_js() -> str:
         return true;
       }
 
-      // Listen for internal link clicks from iframe
+      // Listen for internal link clicks and fetch requests from iframe
       window.addEventListener('message', function(e) {
-        if (!e.data || e.data.type !== 'pagevault-nav') return;
-        var href = e.data.href;
-        var clean = href.split('#')[0].split('?')[0];
-        if (!clean) return;
-        var target = resolvePath(currentPage, clean);
-        if (htmlFiles.has(target)) {
-          renderPage(target);
+        if (!e.data || !e.data.type) return;
+        if (e.data.type === 'pagevault-nav') {
+          var href = e.data.href;
+          var clean = href.split('#')[0].split('?')[0];
+          if (!clean) return;
+          var target = resolvePath(currentPage, clean);
+          if (htmlFiles.has(target)) {
+            renderPage(target);
+          }
+        } else if (e.data.type === 'pagevault-fetch') {
+          var fetchPath = e.data.path;
+          var clean = fetchPath.split('#')[0].split('?')[0];
+          var resolved = resolvePath(currentPage, clean);
+          var r = resources[resolved];
+          if (r) {
+            iframe.contentWindow.postMessage({
+              type: 'pagevault-fetch-response',
+              id: e.data.id,
+              data: toDataUri(resolved),
+              mime: r.mime
+            }, '*');
+          } else {
+            iframe.contentWindow.postMessage({
+              type: 'pagevault-fetch-response',
+              id: e.data.id,
+              data: null
+            }, '*');
+          }
         }
       });
 
@@ -1246,6 +1267,22 @@ def _get_site_renderer_js() -> str:
     // Intercept clicks on internal links and forward to parent via postMessage.
     // Split 'script' tags to avoid closing the outer <script> in the wrapper HTML.
     var tag = '<scr' + 'ipt>' +
+      // Fetch shim for local resource requests
+      'var __pvFetchId=0,__pvFetchWaiters={};' +
+      'window.addEventListener("message",function(e){' +
+      'if(e.data&&e.data.type==="pagevault-fetch-response"&&__pvFetchWaiters[e.data.id]){' +
+      '__pvFetchWaiters[e.data.id](e.data);delete __pvFetchWaiters[e.data.id];}});' +
+      'var __pvOrigFetch=window.fetch;' +
+      'window.fetch=function(input,init){' +
+      'if(typeof input==="string"&&!input.match(/^(https?:|data:|blob:|about:|\\/\\/)/)){' +
+      'return new Promise(function(resolve,reject){' +
+      'var id=++__pvFetchId;' +
+      '__pvFetchWaiters[id]=function(resp){' +
+      'if(resp.data){__pvOrigFetch(resp.data).then(resolve,reject);}' +
+      'else{__pvOrigFetch(input,init).then(resolve,reject);}};' +
+      'window.parent.postMessage({type:"pagevault-fetch",path:input,id:id},"*");' +
+      '});}' +
+      'return __pvOrigFetch.call(window,input,init);};' +
       'document.addEventListener("click",function(e){' +
       'var a=e.target.closest("a");if(!a)return;' +
       'var h=a.getAttribute("href");' +
