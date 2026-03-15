@@ -1716,32 +1716,109 @@ def config_where(directory):
         click.echo(f"Local config:  No {CONFIG_FILENAME} found (searched from {start})")
 
 
+@config.command("set")
+@click.argument("key")
+@click.argument("value", required=False)
+@click.option("--global", "is_global", is_flag=True, help="Update global config")
+@click.option("--unset", is_flag=True, help="Remove the key entirely")
+@click.option(
+    "-c",
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Config file path",
+)
+def config_set(key, value, is_global, unset, config_path):
+    """Set or unset a config value.
+
+    \b
+    Examples:
+        pagevault config set user alex          # Set default user
+        pagevault config set user --unset       # Clear default user
+        pagevault config set --global user alex  # Set in global config
+    """
+    ALLOWED_KEYS = {"user", "password", "pad"}
+
+    if key not in ALLOWED_KEYS:
+        raise click.ClickException(
+            f"Cannot set '{key}'. Allowed keys: {', '.join(sorted(ALLOWED_KEYS))}"
+        )
+
+    if unset and value is not None:
+        raise click.ClickException("Cannot specify both a value and --unset.")
+    if not unset and value is None:
+        raise click.ClickException(f"Provide a value or use --unset to remove '{key}'.")
+
+    try:
+        if is_global:
+            raw = _load_raw_global()
+            use_global = True
+        else:
+            resolved, use_global = _resolve_config_path(config_path, fallback_global=True)
+            with open(resolved) as f:
+                raw = yaml.safe_load(f) or {}
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if unset:
+        if key in raw:
+            del raw[key]
+        target = "global" if (is_global or use_global) else "local"
+        click.echo(f"Unset '{key}' ({target}).")
+    else:
+        # Type coerce for known keys
+        if key == "pad":
+            value = value.lower() in ("true", "1", "yes")
+        if key == "password":
+            click.echo(
+                "Warning: This stores the password as plaintext in .pagevault.yaml."
+            )
+            click.echo("Consider using -p on the command line instead.")
+        raw[key] = value
+        target = "global" if (is_global or use_global) else "local"
+        display_value = str(value).lower() if isinstance(value, bool) else value
+        click.echo(f"Set '{key}' = '{display_value}' ({target}).")
+
+    try:
+        if is_global or use_global:
+            _save_global(raw)
+        else:
+            _save_local(resolved, raw)
+    except (PagevaultError, OSError) as e:
+        raise click.ClickException(str(e))
+
+
 @config.group()
 def user():
     """Manage users for multi-user encryption."""
     pass
 
 
-def _resolve_config_path(config_path: str | None) -> Path:
-    """Find config file from explicit path or directory traversal.
+def _resolve_config_path(config_path: str | None, fallback_global: bool = False) -> tuple[Path, bool]:
+    """Find config file from explicit path, directory traversal, or global fallback.
 
     Args:
         config_path: Explicit path from -c flag, or None.
+        fallback_global: If True, fall back to global config when no local found.
 
     Returns:
-        Resolved Path to config file.
+        Tuple of (resolved Path, is_global).
 
     Raises:
         click.ClickException: If no config file found.
     """
     if config_path:
-        return Path(config_path)
+        return Path(config_path), False
     found = find_config_file()
-    if not found:
-        raise click.ClickException(
-            f"No {CONFIG_FILENAME} found. Run 'pagevault config init' first."
-        )
-    return found
+    if found:
+        return found, False
+    if fallback_global:
+        global_path = get_global_config_path()
+        if global_path.exists():
+            return global_path, True
+    raise click.ClickException(
+        f"No {CONFIG_FILENAME} found. Run 'pagevault config init' first."
+    )
 
 
 def _load_raw_global() -> dict:
@@ -1751,6 +1828,14 @@ def _load_raw_global() -> dict:
         raise FileNotFoundError(f"Global config not found: {path}")
     with open(path) as f:
         return yaml.safe_load(f) or {}
+
+
+def _save_local(path: Path, data: dict) -> None:
+    """Write data back to a local config file."""
+    content = "# pagevault configuration\n"
+    content += "# WARNING: Add this file to .gitignore - it contains passwords!\n\n"
+    content += yaml.dump(data, default_flow_style=False, sort_keys=False)
+    path.write_text(content, encoding="utf-8")
 
 
 def _save_global(data: dict) -> None:
@@ -1792,8 +1877,9 @@ def user_add(username, user_password, is_global, config_path):
     try:
         if is_global:
             raw = _load_raw_global()
+            use_global = True
         else:
-            resolved = _resolve_config_path(config_path)
+            resolved, use_global = _resolve_config_path(config_path, fallback_global=True)
             with open(resolved) as f:
                 raw = yaml.safe_load(f) or {}
     except FileNotFoundError as e:
@@ -1818,9 +1904,9 @@ def user_add(username, user_password, is_global, config_path):
     users[username] = user_password
     raw["users"] = users
 
-    target = "global" if is_global else "local"
+    target = "global" if (is_global or use_global) else "local"
     try:
-        if is_global:
+        if is_global or use_global:
             _save_global(raw)
         else:
             update_config_users(resolved, users)
@@ -1849,8 +1935,9 @@ def user_rm(username, is_global, config_path):
     try:
         if is_global:
             raw = _load_raw_global()
+            use_global = True
         else:
-            resolved = _resolve_config_path(config_path)
+            resolved, use_global = _resolve_config_path(config_path, fallback_global=True)
             with open(resolved) as f:
                 raw = yaml.safe_load(f) or {}
     except FileNotFoundError as e:
@@ -1860,29 +1947,39 @@ def user_rm(username, is_global, config_path):
 
     if username not in users:
         # Check if user exists in the other tier
-        other_tier = "global" if not is_global else "local"
-        global_users = load_global_config().get("users", {})
-        all_users = {**global_users, **users}
-        if username in all_users:
-            raise click.ClickException(
-                f"User '{username}' is not in {'global' if is_global else 'local'} config "
-                f"(exists in {other_tier}; use {'--global' if not is_global else '-c'} to remove)"
-            )
+        if not (is_global or use_global):
+            global_users = load_global_config().get("users", {})
+            if username in global_users:
+                raise click.ClickException(
+                    f"User '{username}' is not in local config "
+                    f"(exists in global; use --global to remove)"
+                )
         raise click.ClickException(f"User '{username}' not found.")
 
     del users[username]
-    raw["users"] = users if users else {}
+    if users:
+        raw["users"] = users
+    elif "users" in raw:
+        del raw["users"]
 
-    target = "global" if is_global else "local"
+    # Clear default user if it was the one we just removed
+    cleared_default = False
+    if raw.get("user") == username:
+        del raw["user"]
+        cleared_default = True
+
+    target = "global" if (is_global or use_global) else "local"
     try:
-        if is_global:
+        if is_global or use_global:
             _save_global(raw)
         else:
-            update_config_users(resolved, users if users else None)
+            _save_local(resolved, raw)
     except PagevaultError as e:
         raise click.ClickException(str(e))
 
     click.echo(f"Removed user '{username}' ({target}).")
+    if cleared_default:
+        click.echo(f"Cleared default user (was '{username}').")
     click.echo("Run 'pagevault sync' to update encrypted files.")
 
 
@@ -1913,7 +2010,7 @@ def user_list(is_global, config_path):
             click.echo(name)
         return
 
-    resolved = _resolve_config_path(config_path)
+    resolved, _ = _resolve_config_path(config_path, fallback_global=True)
 
     try:
         cfg = load_config(config_path=resolved)
@@ -1952,8 +2049,9 @@ def user_passwd(username, user_password, is_global, config_path):
     try:
         if is_global:
             raw = _load_raw_global()
+            use_global = True
         else:
-            resolved = _resolve_config_path(config_path)
+            resolved, use_global = _resolve_config_path(config_path, fallback_global=True)
             with open(resolved) as f:
                 raw = yaml.safe_load(f) or {}
     except FileNotFoundError as e:
@@ -1974,9 +2072,9 @@ def user_passwd(username, user_password, is_global, config_path):
     users[username] = user_password
     raw["users"] = users
 
-    target = "global" if is_global else "local"
+    target = "global" if (is_global or use_global) else "local"
     try:
-        if is_global:
+        if is_global or use_global:
             _save_global(raw)
         else:
             update_config_users(resolved, users)

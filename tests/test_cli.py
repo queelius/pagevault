@@ -3602,3 +3602,33 @@ class TestUsersFilter:
         )
         assert result.exit_code != 0
         assert "multi-user" in result.output.lower()
+
+
+class TestConfigSetPassword:
+    """Tests for password security warnings in config set."""
+
+    def test_config_set_password_warns(self, tmp_path):
+        """config set password should warn about plaintext storage."""
+        runner = CliRunner()
+        config_path = tmp_path / ".pagevault.yaml"
+        config_path.write_text("password: old\n")
+        result = runner.invoke(
+            main, ["config", "set", "password", "newsecret", "-c", str(config_path)]
+        )
+        output_lower = result.output.lower()
+        assert "plaintext" in output_lower or "warning" in output_lower
+
+
+class TestConfigSetFormatting:
+    """Tests for config set output formatting."""
+
+    def test_config_set_pad_echoes_lowercase(self, tmp_path):
+        """config set pad should echo lowercase true/false."""
+        runner = CliRunner()
+        config_path = tmp_path / ".pagevault.yaml"
+        config_path.write_text("{}\n")
+        result = runner.invoke(
+            main, ["config", "set", "pad", "true", "-c", str(config_path)]
+        )
+        # Should not have Python-style "True"
+        assert "'True'" not in result.output
