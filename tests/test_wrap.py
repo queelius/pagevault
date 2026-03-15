@@ -1443,3 +1443,20 @@ class TestGenerateWrapHtmlV3:
         assert "__pv_resolveViewer" in html
         assert "__pv_viewers" in html
         assert "__pv_image" in html
+
+
+class TestV3PaddingStrip:
+    """Tests for v3 renderer stripping null-byte padding."""
+
+    def test_v3_renderer_truncates_blob_to_meta_size(self):
+        """v3 renderer JS should truncate blob using meta.size after decryption."""
+        from pagevault.wrap import _get_renderer_js_v3
+        js = _get_renderer_js_v3([])
+        assert "meta.size" in js
+        assert ".slice(" in js or "slice(0" in js
+
+    def test_v3_renderer_has_padding_comment(self):
+        """v3 renderer should document the padding strip."""
+        from pagevault.wrap import _get_renderer_js_v3
+        js = _get_renderer_js_v3([])
+        assert "padding" in js.lower() or "pad" in js.lower()

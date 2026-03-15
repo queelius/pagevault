@@ -852,6 +852,10 @@ def _get_renderer_js_v3(viewers: list) -> str:  # noqa: E501
     }}
 
     var meta = result.meta || {{}};
+    // Strip null-byte padding (from --pad option during lock)
+    if (meta.size && result.blob.size > meta.size) {{
+      result.blob = result.blob.slice(0, meta.size, result.blob.type);
+    }}
     pvEl.setAttribute('data-decrypted', 'true');
 
     if (meta.type === 'site' && window.__pagevault_renderSite) {{
