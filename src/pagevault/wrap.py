@@ -1148,6 +1148,18 @@ def _get_site_renderer_js() -> str:
           return match;
         });
 
+        // Rewrite CSS @import with bare string syntax
+        html = html.replace(/@import\\s+(['"])([^'"]+?)\\1/gi, function(match, quote, url) {
+          if (url.startsWith('http://') || url.startsWith('https://') ||
+              url.startsWith('data:')) {
+            return match;
+          }
+          var resolved = resolvePath(fromPage, url);
+          var uri = toDataUri(resolved);
+          if (uri) return '@import ' + quote + uri + quote;
+          return match;
+        });
+
         // Rewrite quoted strings that match known resource paths.
         // Catches dynamic JS references like img.src = imageData.url
         // where the URL is stored in JSON/JS as "media/xxx.png".

@@ -1497,3 +1497,13 @@ class TestSrcsetRewriting:
         assert "srcset" in js.lower()
         # Should split srcset entries on comma and process each URL
         assert "split(',')" in js
+
+
+class TestCssImportRewriting:
+    """Tests for CSS @import rewriting in site renderer."""
+
+    def test_css_import_bare_string_pattern(self):
+        """Site renderer should rewrite @import 'file.css' bare string syntax."""
+        from pagevault.wrap import _get_site_renderer_js
+        js = _get_site_renderer_js()
+        assert "@import" in js
