@@ -1460,3 +1460,28 @@ class TestV3PaddingStrip:
         from pagevault.wrap import _get_renderer_js_v3
         js = _get_renderer_js_v3([])
         assert "padding" in js.lower() or "pad" in js.lower()
+
+
+class TestResolvePathAbsolute:
+    """Tests for resolvePath handling absolute paths."""
+
+    def test_resolve_path_handles_absolute_path(self):
+        """Site renderer resolvePath should strip leading / for absolute paths."""
+        from pagevault.wrap import _get_site_renderer_js
+        js = _get_site_renderer_js()
+        assert "href.startsWith('/')" in js
+
+    def test_site_with_absolute_paths_wraps(self, tmp_path):
+        """A site using root-relative paths should wrap successfully."""
+        from pagevault.wrap import wrap_site
+        site_dir = tmp_path / "site"
+        site_dir.mkdir()
+        img_dir = site_dir / "images"
+        img_dir.mkdir()
+        (img_dir / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+        (site_dir / "index.html").write_text(
+            '<html><body><img src="/images/logo.png"></body></html>'
+        )
+        output = wrap_site(site_dir, password="pw")
+        content = output.read_text()
+        assert "startsWith('/')" in content

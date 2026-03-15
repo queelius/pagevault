@@ -1234,6 +1234,10 @@ def _get_site_renderer_js() -> str:
 
   function resolvePath(fromPage, href) {
     if (!href) return fromPage;
+    // Handle absolute paths (strip leading / since zip paths don't have it)
+    if (href.startsWith('/')) {
+      return href.substring(1);
+    }
     href = href.replace(/^\\.\\//g, '');
     // Get directory of the referring page
     var parts = fromPage.split('/');
