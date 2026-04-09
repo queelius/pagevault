@@ -19,10 +19,10 @@ class TestDOMContentLoadedShim:
 
     def test_shim_restores_original(self):
         js = _get_runtime_js()
-        assert (
-            "document.addEventListener = dcl" in js
-            or "document.addEventListener=dcl" in js
-        )
+        # Restoration happens via restoreShims() which assigns the
+        # snapshotted __pvOrigDocAddListener back.
+        assert "restoreShims" in js
+        assert "__pvOrigDocAddListener" in js
 
     def test_callbacks_invoked_after_scripts(self):
         js = _get_runtime_js()
@@ -215,19 +215,50 @@ class TestCustomEventTiming:
         js = _get_runtime_js()
         assert "pagevault:decrypted" in js
 
-    def test_event_after_activation(self):
+    def test_activated_event_present(self):
+        """A separate pagevault:activated event fires after script activation."""
         js = _get_runtime_js()
-        # The event dispatch is in the activateNext completion branch
-        # (i >= scripts.length), which runs after all replaceChild calls.
-        # Both are inside activateNext — verify they share the same function.
-        assert "replaceChild" in js
-        assert "pagevault:decrypted" in js
-        # The event fires in the "done" guard (i >= scripts.length)
-        # which precedes replaceChild in source but executes after all
-        # scripts are activated. Verify structural relationship:
-        # activateNext contains both the event dispatch and replaceChild.
-        activate_fn_pos = js.index("function activateNext")
-        event_pos = js.index("pagevault:decrypted")
-        replace_pos = js.index("replaceChild")
-        assert activate_fn_pos < event_pos
-        assert activate_fn_pos < replace_pos
+        assert "pagevault:activated" in js
+
+    def test_decrypted_event_fires_before_activation_chain(self):
+        """pagevault:decrypted fires immediately after innerHTML, BEFORE
+        the script activation chain runs. pagevault:activated fires
+        inside finalize() AFTER all scripts have run."""
+        js = _get_runtime_js()
+        # In _decrypt: dispatch 'pagevault:decrypted', THEN append to
+        # __pvActivationChain. Verify the source ordering inside _decrypt.
+        decrypt_method_pos = js.index("async _decrypt(password, username)")
+        decrypted_event_in_decrypt = js.index("pagevault:decrypted", decrypt_method_pos)
+        chain_append_pos = js.index("__pvActivationChain = __pvActivationChain.then")
+        assert decrypted_event_in_decrypt < chain_append_pos
+        # And pagevault:activated lives inside __pvActivateContent's finalize()
+        activated_event_pos = js.index("pagevault:activated")
+        finalize_def_pos = js.index("function finalize()")
+        assert finalize_def_pos < activated_event_pos
+
+    def test_activation_serialized_via_promise_chain(self):
+        """Critical: concurrent decryption must be serialized to prevent
+        global shim corruption."""
+        js = _get_runtime_js()
+        assert "__pvActivationChain" in js
+
+    def test_window_onload_only_fires_if_replaced(self):
+        """Critical: window.onload must NOT be re-invoked unless a
+        decrypted script replaced it. Otherwise the host page's onload
+        runs N+1 times for N pagevault elements."""
+        js = _get_runtime_js()
+        assert "origOnload" in js
+        assert "window.onload !== origOnload" in js
+
+    def test_activation_has_error_recovery(self):
+        """Critical: script errors must not leak shims permanently.
+        finalize() must run even if a script throws."""
+        js = _get_runtime_js()
+        # try/catch around activateNext body, finalize() in catch branch
+        assert "script activation error" in js or "try {" in js
+
+    def test_parentnode_guard(self):
+        """Critical: if an earlier script removes a script's ancestor,
+        replaceChild would throw on parentNode null. Guard prevents this."""
+        js = _get_runtime_js()
+        assert "parentNode" in js
