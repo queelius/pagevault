@@ -40,7 +40,7 @@ class TestWindowLoadShim:
 
     def test_window_load_callbacks_invoked(self):
         js = _get_runtime_js()
-        assert "wlCallbacks" in js
+        assert "wlCallbacks.forEach" in js
 
 
 class TestInlineScriptActivation:
@@ -136,8 +136,9 @@ class TestModuleScripts:
 class TestJsonScripts:
     def test_json_scripts_skipped(self):
         js = _get_runtime_js()
-        # Should have logic to skip non-executable types
-        assert "isExecutable" in js or "type" in js
+        # isExecutable() filters non-JS MIME types so JSON scripts
+        # are preserved but not re-executed
+        assert "isExecutable" in js
 
     def test_roundtrip_preserves_json_script(self):
         html = (
@@ -254,8 +255,9 @@ class TestCustomEventTiming:
         """Critical: script errors must not leak shims permanently.
         finalize() must run even if a script throws."""
         js = _get_runtime_js()
-        # try/catch around activateNext body, finalize() in catch branch
-        assert "script activation error" in js or "try {" in js
+        # try/catch around activateNext body logs error and
+        # calls finalize() in catch branch
+        assert "script activation error" in js
 
     def test_parentnode_guard(self):
         """Critical: if an earlier script removes a script's ancestor,
