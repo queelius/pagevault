@@ -1,0 +1,8 @@
+[     271ms] Identifier 'observer' has already been declared
+[     716ms] [WARNING] goatcounter: not counting because of: localhost @ http://gc.zgo.at/count.js:78
+[    1051ms] [WARNING] Failed to execute 'postMessage' on 'DOMWindow': The target origin provided ('https://giscus.app') does not match the recipient window's origin ('http://localhost:1313'). @ http://localhost:1313/post/2026-02-13-pagevault/:1155
+[    1576ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:1313/favicon.ico:0
+[    2176ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://giscus.app/api/discussions?repo=queelius%2Fmetafunctor&term=post%2F2026-02-13-pagevault%2F&category=General&number=0&strict=false&last=15:0
+[    2240ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://giscus.app/api/discussions?repo=queelius%2Fmetafunctor&term=post%2F2026-02-13-pagevault%2F&category=General&number=0&strict=false&first=15:0
+[    2243ms] [WARNING] [giscus] Discussion not found. A new discussion will be created if a comment/reaction is submitted. @ https://giscus.app/client.js:6
+[    2291ms] [WARNING] [giscus] Discussion not found. A new discussion will be created if a comment/reaction is submitted. @ https://giscus.app/client.js:6

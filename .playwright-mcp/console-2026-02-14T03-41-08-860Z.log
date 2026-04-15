@@ -1,0 +1,4 @@
+[      50ms] SyntaxError: Failed to execute 'define' on 'CustomElementRegistry': "pagevault" is not a valid custom element name
+    at http://localhost:8765/dashboard.html:443:20
+    at http://localhost:8765/dashboard.html:445:3
+[      92ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8765/favicon.ico:0

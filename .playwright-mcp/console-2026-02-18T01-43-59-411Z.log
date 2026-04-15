@@ -1,0 +1,3 @@
+[   16904ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://localhost:8765/site-bundle.html:593
+[   16938ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ blob:http://localhost:8765/030b52b2-1b8b-4eca-afb2-f3edf938149d:0
+[   40436ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ blob:http://localhost:8765/8a838654-2327-4d75-84de-3313ba201de1:0
