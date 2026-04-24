@@ -125,9 +125,13 @@ class ViewerPlugin(ABC):
     @classmethod
     def _load_js_asset(cls, filename: str) -> str:
         """Load a JS asset from src/pagevault/js/viewers/<filename>."""
-        return (files("pagevault.js") / "viewers" / filename).read_text(encoding="utf-8")
+        return (
+            (files("pagevault.js") / "viewers" / filename).read_text(encoding="utf-8")
+        )
 
     @classmethod
     def _load_css_asset(cls, filename: str) -> str:
         """Load a CSS asset from src/pagevault/js/viewers/<filename>."""
-        return (files("pagevault.js") / "viewers" / filename).read_text(encoding="utf-8")
+        return (
+            (files("pagevault.js") / "viewers" / filename).read_text(encoding="utf-8")
+        )

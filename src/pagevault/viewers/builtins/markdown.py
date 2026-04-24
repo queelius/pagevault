@@ -29,4 +29,5 @@ class MarkdownViewer(ViewerPlugin):
         return self._load_css_asset("markdown.css")
 
     def dependencies(self) -> list[str]:
-        return [(files("pagevault") / "vendor" / "marked.min.js").read_text(encoding="utf-8")]
+        marked = (files("pagevault") / "vendor" / "marked.min.js")
+        return [marked.read_text(encoding="utf-8")]

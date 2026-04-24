@@ -66,8 +66,6 @@ select = ["E", "F", "I", "W"]
 # These files contain inline JS/CSS that can't be line-wrapped
 "src/pagevault/parser.py" = ["E501"]
 "src/pagevault/wrap.py" = ["E501"]
-"src/pagevault/viewers/builtins/html.py" = ["E501"]
-"src/pagevault/viewers/builtins/markdown.py" = ["E501"]
 
 [tool.coverage.run]
 source = ["src/pagevault"]
