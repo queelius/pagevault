@@ -4,7 +4,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 from pagevault.config import DefaultsConfig, PagevaultConfig, TemplateConfig
-from pagevault.crypto import PagevaultError, content_hash, decrypt, generate_salt
+from pagevault.crypto import PagevaultError, content_hash, generate_salt
 from pagevault.parser import (
     extract_element_content,
     find_pagevault_elements,
@@ -739,8 +739,9 @@ class TestComposableEncryption:
         soup1 = BeautifulSoup(encrypted1, "html.parser")
         soup2 = BeautifulSoup(encrypted2, "html.parser")
 
-        env1 = soup1.find("pagevault").find("script", attrs={"data-pv-meta": True}).string
-        env2 = soup2.find("pagevault").find("script", attrs={"data-pv-meta": True}).string
+        meta_attr = {"data-pv-meta": True}
+        env1 = soup1.find("pagevault").find("script", attrs=meta_attr).string
+        env2 = soup2.find("pagevault").find("script", attrs=meta_attr).string
 
         # Envelope preserved (password1 still decrypts)
         assert env1 == env2
@@ -803,8 +804,9 @@ class TestComposableEncryption:
 
         # Envelope PRESERVED (not re-encrypted with password2)
         soup1 = BeautifulSoup(encrypted1, "html.parser")
-        env1 = soup1.find("pagevault").find("script", attrs={"data-pv-meta": True}).string
-        env2 = elements[0].find("script", attrs={"data-pv-meta": True}).string
+        meta_attr = {"data-pv-meta": True}
+        env1 = soup1.find("pagevault").find("script", attrs=meta_attr).string
+        env2 = elements[0].find("script", attrs=meta_attr).string
         assert env1 == env2
 
         # And the original password still decrypts it

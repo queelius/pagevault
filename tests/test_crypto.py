@@ -1,14 +1,11 @@
 """Tests for pagevault.crypto module."""
 
-import base64
-import json
 import os
 
 import pytest
 
 from pagevault.crypto import (
     CHUNK_SIZE,
-    ITERATIONS,
     SALT_LENGTH,
     VERSION_V3,
     PagevaultError,
@@ -17,206 +14,15 @@ from pagevault.crypto import (
     _wrap_key,
     content_hash,
     content_hash_bytes,
-    decrypt,
     decrypt_chunked,
-    encrypt,
     encrypt_chunked,
     generate_salt,
     hex_to_salt,
-    inspect_payload,
     inspect_payload_v3,
     pad_content,
-    rewrap_keys,
     salt_to_hex,
-    verify_password,
     verify_password_v3,
 )
-
-
-class TestEncryptDecrypt:
-    """Tests for encrypt/decrypt functions."""
-
-    def test_basic_roundtrip(self):
-        """Test encryption followed by decryption returns original."""
-        plaintext = "Hello, World!"
-        password = "test-password"
-
-        ciphertext = encrypt(plaintext, password=password)
-        content, meta = decrypt(ciphertext, password)
-
-        assert content == plaintext
-
-    def test_empty_string(self):
-        """Test encryption of empty string."""
-        plaintext = ""
-        password = "test-password"
-
-        ciphertext = encrypt(plaintext, password=password)
-        content, meta = decrypt(ciphertext, password)
-
-        assert content == plaintext
-
-    def test_unicode_content(self):
-        """Test encryption of unicode content."""
-        plaintext = "Hello 世界! 🔒 émoji"
-        password = "test-password"
-
-        ciphertext = encrypt(plaintext, password=password)
-        content, meta = decrypt(ciphertext, password)
-
-        assert content == plaintext
-
-    def test_large_content(self):
-        """Test encryption of large content."""
-        plaintext = "x" * 100000
-        password = "test-password"
-
-        ciphertext = encrypt(plaintext, password=password)
-        content, meta = decrypt(ciphertext, password)
-
-        assert content == plaintext
-
-    def test_html_content(self):
-        """Test encryption of HTML content."""
-        plaintext = """
-        <div class="content">
-            <h1>Secret Title</h1>
-            <p>Secret paragraph with <strong>formatting</strong>.</p>
-        </div>
-        """
-        password = "test-password"
-
-        ciphertext = encrypt(plaintext, password=password)
-        content, meta = decrypt(ciphertext, password)
-
-        assert content == plaintext
-
-    def test_wrong_password(self):
-        """Test decryption with wrong password fails."""
-        plaintext = "Secret content"
-        password = "correct-password"
-        wrong_password = "wrong-password"
-
-        ciphertext = encrypt(plaintext, password=password)
-
-        with pytest.raises(PagevaultError, match="wrong password"):
-            decrypt(ciphertext, wrong_password)
-
-    def test_different_ciphertext_each_time(self):
-        """Test that same plaintext produces different ciphertext."""
-        plaintext = "Same content"
-        password = "test-password"
-
-        ciphertext1 = encrypt(plaintext, password=password)
-        ciphertext2 = encrypt(plaintext, password=password)
-
-        # Different due to random IV
-        assert ciphertext1 != ciphertext2
-
-        # But both decrypt correctly
-        content1, _ = decrypt(ciphertext1, password)
-        content2, _ = decrypt(ciphertext2, password)
-        assert content1 == plaintext
-        assert content2 == plaintext
-
-    def test_with_explicit_salt(self):
-        """Test encryption with explicit salt."""
-        plaintext = "Secret content"
-        password = "test-password"
-        salt = generate_salt()
-
-        ciphertext = encrypt(plaintext, password=password, salt=salt)
-        content, meta = decrypt(ciphertext, password)
-
-        assert content == plaintext
-
-        # Verify salt is in payload
-        decoded = json.loads(base64.b64decode(ciphertext))
-        assert base64.b64decode(decoded["salt"]) == salt
-
-    def test_invalid_salt_length(self):
-        """Test encryption with wrong salt length fails."""
-        with pytest.raises(PagevaultError, match="Salt must be"):
-            encrypt("test", password="password", salt=b"short")
-
-
-class TestCiphertextFormat:
-    """Tests for ciphertext format validation."""
-
-    def test_ciphertext_is_base64(self):
-        """Test that ciphertext is valid base64."""
-        ciphertext = encrypt("test", password="password")
-
-        # Should not raise
-        decoded = base64.b64decode(ciphertext)
-        assert len(decoded) > 0
-
-    def test_ciphertext_contains_json(self):
-        """Test that ciphertext contains valid JSON."""
-        ciphertext = encrypt("test", password="password")
-        decoded = base64.b64decode(ciphertext)
-
-        data = json.loads(decoded)
-        assert isinstance(data, dict)
-
-    def test_ciphertext_has_required_fields(self):
-        """Test that ciphertext has all required fields."""
-        ciphertext = encrypt("test", password="password")
-        decoded = base64.b64decode(ciphertext)
-        data = json.loads(decoded)
-
-        assert data["v"] == 2
-        assert data["alg"] == "aes-256-gcm"
-        assert data["kdf"] == "pbkdf2-sha256"
-        assert data["iter"] == ITERATIONS
-        assert "salt" in data
-        assert "iv" in data
-        assert "ct" in data
-        assert "keys" in data
-        assert isinstance(data["keys"], list)
-        assert len(data["keys"]) >= 1
-
-    def test_invalid_base64_fails(self):
-        """Test decryption of invalid base64 fails."""
-        with pytest.raises(PagevaultError, match="Invalid base64"):
-            decrypt("not-valid-base64!!!", "password")
-
-    def test_invalid_json_fails(self):
-        """Test decryption of invalid JSON fails."""
-        invalid = base64.b64encode(b"not json").decode()
-        with pytest.raises(PagevaultError, match="Invalid JSON"):
-            decrypt(invalid, "password")
-
-    def test_missing_version_fails(self):
-        """Test decryption with missing version fails."""
-        payload = {"salt": "AA==", "iv": "AA==", "ct": "AA==", "keys": []}
-        invalid = base64.b64encode(json.dumps(payload).encode()).decode()
-        with pytest.raises(PagevaultError, match="Unsupported format version"):
-            decrypt(invalid, "password")
-
-    def test_wrong_version_fails(self):
-        """Test decryption with wrong version fails."""
-        payload = {"v": 99, "salt": "AA==", "iv": "AA==", "ct": "AA==", "keys": []}
-        invalid = base64.b64encode(json.dumps(payload).encode()).decode()
-        with pytest.raises(PagevaultError, match="Unsupported format version"):
-            decrypt(invalid, "password")
-
-    def test_missing_fields_fail(self):
-        """Test decryption with missing fields fails."""
-        for missing in ["salt", "iv", "ct", "keys"]:
-            payload = {
-                "v": 2,
-                "salt": "AA==",
-                "iv": "AA==",
-                "ct": "AA==",
-                "keys": [{"iv": "AA==", "ct": "AA=="}],
-            }
-            del payload[missing]
-            invalid = base64.b64encode(json.dumps(payload).encode()).decode()
-            with pytest.raises(
-                PagevaultError, match=f"Missing required field: {missing}"
-            ):
-                decrypt(invalid, "password")
 
 
 class TestSaltFunctions:
@@ -311,135 +117,110 @@ class TestContentHash:
         assert hash2 != hash3
 
 
-class TestMultiUser:
-    """Tests for multi-user encryption and decryption."""
+class TestMultiUserChunked:
+    """Tests for multi-user encryption via the chunked (v4) API."""
 
     def test_multiuser_encrypt_decrypt(self):
         """Encrypt with multiple users and decrypt as each user."""
-        plaintext = "Shared secret content"
+        plaintext = b"Shared secret content"
         users = {"alice": "pw-a", "bob": "pw-b"}
 
-        ciphertext = encrypt(plaintext, users=users)
+        env, chunks = encrypt_chunked(plaintext, users=users)
 
         # Both users can decrypt
-        content_a, _ = decrypt(ciphertext, "pw-a", username="alice")
+        content_a, _ = decrypt_chunked(env, chunks, "pw-a", username="alice")
         assert content_a == plaintext
 
-        content_b, _ = decrypt(ciphertext, "pw-b", username="bob")
+        content_b, _ = decrypt_chunked(env, chunks, "pw-b", username="bob")
         assert content_b == plaintext
 
     def test_multiuser_wrong_username_fails(self):
         """Decrypt with wrong username should fail."""
-        plaintext = "Secret"
         users = {"alice": "pw-a", "bob": "pw-b"}
-
-        ciphertext = encrypt(plaintext, users=users)
+        env, chunks = encrypt_chunked(b"Secret", users=users)
 
         with pytest.raises(PagevaultError, match="wrong password"):
-            decrypt(ciphertext, "pw-a", username="charlie")
+            decrypt_chunked(env, chunks, "pw-a", username="charlie")
 
     def test_multiuser_wrong_password_fails(self):
         """Decrypt with right username but wrong password should fail."""
-        plaintext = "Secret"
-        users = {"alice": "pw-a"}
-
-        ciphertext = encrypt(plaintext, users=users)
+        env, chunks = encrypt_chunked(b"Secret", users={"alice": "pw-a"})
 
         with pytest.raises(PagevaultError, match="wrong password"):
-            decrypt(ciphertext, "wrong-pw", username="alice")
+            decrypt_chunked(env, chunks, "wrong-pw", username="alice")
 
     def test_cannot_specify_both_password_and_users(self):
         """Specifying both password and users should raise PagevaultError."""
         with pytest.raises(PagevaultError, match="Cannot specify both"):
-            encrypt("test", password="pw", users={"alice": "pw-a"})
+            encrypt_chunked(b"test", password="pw", users={"alice": "pw-a"})
 
     def test_must_specify_password_or_users(self):
         """Specifying neither password nor users should raise PagevaultError."""
         with pytest.raises(PagevaultError, match="Must specify either"):
-            encrypt("test")
-
-    def test_empty_users_dict_rejected(self):
-        """Empty users={} would crash deep in _wrap_cek_for_users with an
-        AttributeError. Validate at the API boundary with a clean error."""
-        with pytest.raises(PagevaultError, match="must not be empty"):
-            encrypt("test", users={})
+            encrypt_chunked(b"test")
 
     def test_shared_salt_across_key_blobs(self):
-        """All key blobs in a multi-user payload share the same salt."""
+        """All key blobs in a multi-user envelope share the same salt."""
         users = {"alice": "pw-a", "bob": "pw-b", "charlie": "pw-c"}
-        ciphertext = encrypt("test", users=users)
+        env, _ = encrypt_chunked(b"test", users=users)
 
-        data = json.loads(base64.b64decode(ciphertext))
-
-        # There is a single salt at the top level, shared by all key blobs
-        assert "salt" in data
-        assert len(data["keys"]) == 3
-        # Key blobs themselves don't have separate salt fields
-        for key_blob in data["keys"]:
+        assert "salt" in env
+        assert len(env["keys"]) == 3
+        for key_blob in env["keys"]:
             assert "salt" not in key_blob
 
     def test_unique_wrap_ivs(self):
         """Each key blob should have a different IV."""
         users = {"alice": "pw-a", "bob": "pw-b", "charlie": "pw-c"}
-        ciphertext = encrypt("test", users=users)
-
-        data = json.loads(base64.b64decode(ciphertext))
-        ivs = [blob["iv"] for blob in data["keys"]]
-
-        # All IVs should be unique
+        env, _ = encrypt_chunked(b"test", users=users)
+        ivs = [blob["iv"] for blob in env["keys"]]
         assert len(set(ivs)) == len(ivs)
 
 
-class TestMetadata:
-    """Tests for metadata support in encrypt/decrypt."""
+class TestMetadataChunked:
+    """Tests for metadata support in chunked (v4) encryption."""
 
     def test_metadata_roundtrip(self):
         """Encrypt with metadata and verify it survives decryption."""
-        plaintext = "Content with metadata"
         meta = {"key": "value"}
+        data = b"Content with metadata"
+        env, chunks = encrypt_chunked(data, password="pw", meta=meta)
+        content, returned_meta = decrypt_chunked(env, chunks, "pw")
 
-        ciphertext = encrypt(plaintext, password="pw", meta=meta)
-        content, returned_meta = decrypt(ciphertext, "pw")
-
-        assert content == plaintext
+        assert content == data
         assert returned_meta == meta
 
-    def test_no_metadata_returns_none(self):
-        """Encrypt without meta param returns (content, None) on decrypt."""
-        plaintext = "No metadata here"
+    def test_no_metadata_returns_empty_dict(self):
+        """Encrypt without meta returns an empty dict on decrypt."""
+        env, chunks = encrypt_chunked(b"No metadata here", password="pw")
+        content, returned_meta = decrypt_chunked(env, chunks, "pw")
 
-        ciphertext = encrypt(plaintext, password="pw")
-        content, returned_meta = decrypt(ciphertext, "pw")
-
-        assert content == plaintext
-        assert returned_meta is None
+        assert content == b"No metadata here"
+        assert returned_meta == {}
 
     def test_metadata_with_nested_dict(self):
         """Encrypt with nested metadata dict."""
-        plaintext = "Nested metadata"
         meta = {
             "author": "alice",
             "tags": ["secret", "important"],
             "settings": {"level": 3, "enabled": True},
         }
 
-        ciphertext = encrypt(plaintext, password="pw", meta=meta)
-        content, returned_meta = decrypt(ciphertext, "pw")
+        env, chunks = encrypt_chunked(b"Nested metadata", password="pw", meta=meta)
+        content, returned_meta = decrypt_chunked(env, chunks, "pw")
 
-        assert content == plaintext
+        assert content == b"Nested metadata"
         assert returned_meta == meta
 
     def test_metadata_does_not_affect_content(self):
         """Same content with different meta should decrypt to same content."""
-        plaintext = "Same content"
+        env1, ch1 = encrypt_chunked(b"Same content", password="pw", meta={"a": 1})
+        env2, ch2 = encrypt_chunked(b"Same content", password="pw", meta={"b": 2})
 
-        ct1 = encrypt(plaintext, password="pw", meta={"a": 1})
-        ct2 = encrypt(plaintext, password="pw", meta={"b": 2})
+        content1, meta1 = decrypt_chunked(env1, ch1, "pw")
+        content2, meta2 = decrypt_chunked(env2, ch2, "pw")
 
-        content1, meta1 = decrypt(ct1, "pw")
-        content2, meta2 = decrypt(ct2, "pw")
-
-        assert content1 == content2 == plaintext
+        assert content1 == content2 == b"Same content"
         assert meta1 == {"a": 1}
         assert meta2 == {"b": 2}
 
@@ -469,140 +250,9 @@ class TestKeyWrapping:
         assert result is None
 
 
-class TestRewrapKeys:
-    """Tests for rewrap_keys() function."""
-
-    def test_rewrap_add_user(self):
-        """Encrypt with one user, rewrap to add another user."""
-        plaintext = "shared secret"
-        ciphertext = encrypt(plaintext, users={"alice": "pw-a"})
-
-        # Rewrap to add bob
-        rewrapped = rewrap_keys(
-            ciphertext,
-            old_users={"alice": "pw-a"},
-            new_users={"alice": "pw-a", "bob": "pw-b"},
-        )
-
-        # Both can decrypt
-        content_a, _ = decrypt(rewrapped, "pw-a", username="alice")
-        assert content_a == plaintext
-
-        content_b, _ = decrypt(rewrapped, "pw-b", username="bob")
-        assert content_b == plaintext
-
-    def test_rewrap_remove_user(self):
-        """Encrypt with two users, rewrap to remove one."""
-        plaintext = "shared secret"
-        ciphertext = encrypt(plaintext, users={"alice": "pw-a", "bob": "pw-b"})
-
-        # Rewrap with only alice
-        rewrapped = rewrap_keys(
-            ciphertext,
-            old_users={"alice": "pw-a"},
-            new_users={"alice": "pw-a"},
-        )
-
-        # Alice can still decrypt
-        content_a, _ = decrypt(rewrapped, "pw-a", username="alice")
-        assert content_a == plaintext
-
-        # Bob can no longer decrypt
-        with pytest.raises(PagevaultError, match="wrong password"):
-            decrypt(rewrapped, "pw-b", username="bob")
-
-    def test_rewrap_change_password(self):
-        """Encrypt with one user, rewrap to change their password."""
-        plaintext = "secret"
-        ciphertext = encrypt(plaintext, users={"alice": "pw1"})
-
-        # Rewrap with new password for alice
-        rewrapped = rewrap_keys(
-            ciphertext,
-            old_users={"alice": "pw1"},
-            new_users={"alice": "pw2"},
-        )
-
-        # New password works
-        content, _ = decrypt(rewrapped, "pw2", username="alice")
-        assert content == plaintext
-
-        # Old password no longer works
-        with pytest.raises(PagevaultError, match="wrong password"):
-            decrypt(rewrapped, "pw1", username="alice")
-
-    def test_rewrap_single_password_to_users(self):
-        """Encrypt with single password, rewrap to multi-user."""
-        plaintext = "migrating to multi-user"
-        ciphertext = encrypt(plaintext, password="pw")
-
-        # Rewrap from single password to users
-        rewrapped = rewrap_keys(
-            ciphertext,
-            old_password="pw",
-            new_users={"alice": "pw-a"},
-        )
-
-        # Alice can decrypt
-        content, _ = decrypt(rewrapped, "pw-a", username="alice")
-        assert content == plaintext
-
-        # Old single password no longer works
-        with pytest.raises(PagevaultError, match="wrong password"):
-            decrypt(rewrapped, "pw")
-
-    def test_rekey_generates_new_ciphertext(self):
-        """Rekey generates new CEK, content still decryptable but ciphertext changed."""
-        plaintext = "rekey me"
-        ciphertext = encrypt(plaintext, password="pw")
-
-        # Rewrap with rekey
-        rewrapped = rewrap_keys(
-            ciphertext,
-            old_password="pw",
-            new_password="pw",
-            rekey=True,
-        )
-
-        # Content still decryptable
-        content, _ = decrypt(rewrapped, "pw")
-        assert content == plaintext
-
-        # But the ciphertext payload changed (new CEK, new IV, new ct)
-        orig_data = json.loads(base64.b64decode(ciphertext))
-        new_data = json.loads(base64.b64decode(rewrapped))
-        assert orig_data["ct"] != new_data["ct"]
-        assert orig_data["iv"] != new_data["iv"]
-
-    def test_rewrap_requires_valid_old_credentials(self):
-        """Rewrap with wrong old credentials should raise PagevaultError."""
-        ciphertext = encrypt("secret", password="correct-pw")
-
-        with pytest.raises(PagevaultError, match="Cannot recover CEK"):
-            rewrap_keys(
-                ciphertext,
-                old_password="wrong-pw",
-                new_password="new-pw",
-            )
-
-    def test_rewrap_requires_new_target(self):
-        """Rewrap without new_users or new_password should raise PagevaultError."""
-        ciphertext = encrypt("secret", password="pw")
-
-        with pytest.raises(
-            PagevaultError, match="Must provide new_users or new_password"
-        ):
-            rewrap_keys(
-                ciphertext,
-                old_password="pw",
-            )
-
-    def test_rewrap_empty_new_users_rejected(self):
-        """Empty new_users={} must be rejected (same semantics as encrypt)."""
-        ciphertext = encrypt("secret", password="pw")
-
-        with pytest.raises(PagevaultError, match="must not be empty"):
-            rewrap_keys(ciphertext, old_password="pw", new_users={})
+# NOTE: rewrap_keys() was a v2-only API and is removed in v0.4.0.
+# Re-wrapping for v4 envelopes happens at the parser layer
+# (parser.sync_html_keys) or by re-encrypting via encrypt_chunked().
 
 
 class TestPadContent:
@@ -646,88 +296,22 @@ class TestPadContent:
         assert padded_len == 16  # next power of 2 after 12
 
     def test_pad_encrypt_decrypt_roundtrip(self):
-        """Test padded content survives encrypt/decrypt with null-byte stripping."""
+        """Padded bytes survive chunked encrypt/decrypt; NUL padding can
+        be stripped by the caller (mirrors parser.py:unlock_html)."""
         original = "<p>Secret content</p>"
         padded = pad_content(original)
         assert len(padded.encode("utf-8")) > len(original.encode("utf-8"))
 
-        encrypted = encrypt(padded, password="pw")
-        decrypted, _meta = decrypt(encrypted, password="pw")
+        env, chunks = encrypt_chunked(padded.encode("utf-8"), password="pw")
+        decrypted_bytes, _meta = decrypt_chunked(env, chunks, "pw")
 
-        # After stripping null bytes, original content is recovered
-        stripped = decrypted.rstrip("\x00")
+        stripped = decrypted_bytes.decode("utf-8").rstrip("\x00")
         assert stripped == original
 
 
-class TestInspectPayload:
-    """Tests for inspect_payload function."""
-
-    def test_inspect_basic(self):
-        """Test inspecting a basic encrypted payload."""
-        payload = encrypt("test content", password="pw")
-        info = inspect_payload(payload)
-
-        assert info["version"] == 2
-        assert info["algorithm"] == "aes-256-gcm"
-        assert info["kdf"] == "pbkdf2-sha256"
-        assert info["iterations"] == 310000
-        assert info["key_count"] == 1
-        assert info["salt_length"] == 16
-        assert info["iv_length"] == 12
-        assert info["ciphertext_length"] > 0
-
-    def test_inspect_multi_user(self):
-        """Test inspecting a multi-user payload."""
-        payload = encrypt(
-            "secret", users={"alice": "pw-a", "bob": "pw-b", "charlie": "pw-c"}
-        )
-        info = inspect_payload(payload)
-
-        assert info["key_count"] == 3
-
-    def test_inspect_invalid_base64(self):
-        """Test error on invalid base64."""
-        with pytest.raises(PagevaultError, match="Invalid base64"):
-            inspect_payload("not-valid-base64!!!")
-
-    def test_inspect_invalid_json(self):
-        """Test error on valid base64 but invalid JSON."""
-        import base64
-
-        payload = base64.b64encode(b"not json").decode("ascii")
-        with pytest.raises(PagevaultError, match="Invalid JSON"):
-            inspect_payload(payload)
-
-
-class TestVerifyPassword:
-    """Tests for verify_password function."""
-
-    def test_correct_password(self):
-        """Test correct password returns True."""
-        payload = encrypt("secret", password="correct-pw")
-        assert verify_password(payload, "correct-pw") is True
-
-    def test_wrong_password(self):
-        """Test wrong password returns False."""
-        payload = encrypt("secret", password="correct-pw")
-        assert verify_password(payload, "wrong-pw") is False
-
-    def test_multi_user_correct(self):
-        """Test correct user/password returns True."""
-        payload = encrypt("secret", users={"alice": "pw-a", "bob": "pw-b"})
-        assert verify_password(payload, "pw-a", username="alice") is True
-        assert verify_password(payload, "pw-b", username="bob") is True
-
-    def test_multi_user_wrong(self):
-        """Test wrong user/password returns False."""
-        payload = encrypt("secret", users={"alice": "pw-a"})
-        assert verify_password(payload, "pw-a", username="bob") is False
-        assert verify_password(payload, "wrong", username="alice") is False
-
-    def test_invalid_payload(self):
-        """Test error on invalid payload."""
-        with pytest.raises(PagevaultError):
-            verify_password("invalid", "pw")
+# NOTE: inspect_payload() and verify_password() were v2-only APIs and
+# are removed in v0.4.0. Use inspect_payload_v3() / verify_password_v3()
+# against a v4 envelope dict (TestInspectPayloadV3 / TestVerifyPasswordV3).
 
 
 class TestChunkIvDerivation:

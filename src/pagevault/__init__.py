@@ -2,17 +2,14 @@
 
 __version__ = "0.3.2"
 
-from .crypto import PagevaultError, decrypt, encrypt, rewrap_keys
+from .crypto import PagevaultError
 from .parser import lock_html, mark_body, mark_elements, unlock_html
 
-# Backward-compatibility aliases
+# Backward-compatibility aliases for pre-v0.4.0 API names
 encrypt_html = lock_html
 decrypt_html = unlock_html
 
 __all__ = [
-    "encrypt",
-    "decrypt",
-    "rewrap_keys",
     "PagevaultError",
     "lock_html",
     "unlock_html",

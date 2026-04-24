@@ -11,10 +11,9 @@ import pytest
 from bs4 import BeautifulSoup
 from click.testing import CliRunner
 
-from pagevault import encrypt
 from pagevault.cli import main
 from pagevault.config import PagevaultConfig, create_default_config, load_config
-from pagevault.crypto import CHUNK_SIZE, decrypt_chunked
+from pagevault.crypto import CHUNK_SIZE, decrypt_chunked, encrypt_chunked
 from pagevault.parser import (
     lock_html,
     mark_body,
@@ -24,35 +23,30 @@ from pagevault.parser import (
 
 
 class TestCryptoCompatibility:
-    """Tests for crypto format compatibility with WebCrypto."""
+    """Tests for the v4 envelope format at the WebCrypto-compatibility level."""
 
-    def test_ciphertext_format_is_webcrypto_compatible(self):
-        """Test ciphertext format can be parsed by browser."""
-        ciphertext = encrypt("test content", password="password")
+    def test_envelope_format_is_webcrypto_compatible(self):
+        """Test v4 envelope format can be parsed by browser."""
+        env, chunks = encrypt_chunked(b"test content", password="password")
 
-        # Decode to get JSON
-        outer = base64.b64decode(ciphertext)
-        data = json.loads(outer)
+        # v4 envelope shape
+        assert env["v"] == 4
+        assert env["alg"] == "aes-256-gcm"
+        assert env["kdf"] == "pbkdf2-sha256"
+        assert env["iter"] == 310000
 
-        # Verify format matches what WebCrypto expects
-        assert data["v"] == 2
-        assert data["alg"] == "aes-256-gcm"
-        assert data["kdf"] == "pbkdf2-sha256"
-        assert data["iter"] == 310000
+        # Keys
+        assert "keys" in env and isinstance(env["keys"], list)
+        assert len(env["keys"]) > 0
 
-        # Verify keys field exists and is a list
-        assert "keys" in data
-        assert isinstance(data["keys"], list)
-        assert len(data["keys"]) > 0
+        # Salt (hex) and iv_base (base64)
+        assert len(bytes.fromhex(env["salt"])) == 16
+        iv_base = base64.b64decode(env["iv_base"])
+        assert len(iv_base) == 12
 
-        # Verify base64-encoded components
-        salt = base64.b64decode(data["salt"])
-        iv = base64.b64decode(data["iv"])
-        ct = base64.b64decode(data["ct"])
-
-        assert len(salt) == 16  # 128-bit salt
-        assert len(iv) == 12  # 96-bit IV for GCM
-        assert len(ct) > 0  # Ciphertext with auth tag
+        # At least one base64 chunk was produced
+        assert len(chunks) > 0
+        assert len(base64.b64decode(chunks[0])) > 0
 
 
 class TestHtmlOutput:
