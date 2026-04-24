@@ -182,6 +182,8 @@ def encrypt(
         raise PagevaultError("Cannot specify both 'password' and 'users'")
     if password is None and users is None:
         raise PagevaultError("Must specify either 'password' or 'users'")
+    if users is not None and len(users) == 0:
+        raise PagevaultError("'users' dict must not be empty")
 
     # Use provided salt or generate random
     if salt is None:
@@ -377,6 +379,8 @@ def rewrap_keys(
     # Determine new wrapping targets
     if new_users is None and new_password is None:
         raise PagevaultError("Must provide new_users or new_password for re-wrapping")
+    if new_users is not None and len(new_users) == 0:
+        raise PagevaultError("'new_users' dict must not be empty")
 
     # Build new key blobs
     new_keys = _wrap_cek_for_users(cek, salt, password=new_password, users=new_users)

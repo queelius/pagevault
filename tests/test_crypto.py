@@ -358,6 +358,12 @@ class TestMultiUser:
         with pytest.raises(PagevaultError, match="Must specify either"):
             encrypt("test")
 
+    def test_empty_users_dict_rejected(self):
+        """Empty users={} would crash deep in _wrap_cek_for_users with an
+        AttributeError. Validate at the API boundary with a clean error."""
+        with pytest.raises(PagevaultError, match="must not be empty"):
+            encrypt("test", users={})
+
     def test_shared_salt_across_key_blobs(self):
         """All key blobs in a multi-user payload share the same salt."""
         users = {"alice": "pw-a", "bob": "pw-b", "charlie": "pw-c"}
@@ -590,6 +596,13 @@ class TestRewrapKeys:
                 ciphertext,
                 old_password="pw",
             )
+
+    def test_rewrap_empty_new_users_rejected(self):
+        """Empty new_users={} must be rejected (same semantics as encrypt)."""
+        ciphertext = encrypt("secret", password="pw")
+
+        with pytest.raises(PagevaultError, match="must not be empty"):
+            rewrap_keys(ciphertext, old_password="pw", new_users={})
 
 
 class TestPadContent:
