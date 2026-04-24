@@ -36,10 +36,6 @@ class PagevaultError(Exception):
     pass
 
 
-# Backward-compatibility alias
-LockhtmlError = PagevaultError
-
-
 def _derive_key(secret: str, salt: bytes) -> bytes:
     """Derive a 256-bit key from secret using PBKDF2-SHA256."""
     kdf = PBKDF2HMAC(
@@ -135,9 +131,7 @@ def _wrap_cek_for_users(
     return keys
 
 
-def _try_unwrap_cek(
-    keys_list: list[dict], wrapping_key: bytes
-) -> bytes | None:
+def _try_unwrap_cek(keys_list: list[dict], wrapping_key: bytes) -> bytes | None:
     """Try to unwrap a CEK from a list of key blobs.
 
     Iterates through key blobs attempting to unwrap with the given
@@ -385,9 +379,7 @@ def rewrap_keys(
         raise PagevaultError("Must provide new_users or new_password for re-wrapping")
 
     # Build new key blobs
-    new_keys = _wrap_cek_for_users(
-        cek, salt, password=new_password, users=new_users
-    )
+    new_keys = _wrap_cek_for_users(cek, salt, password=new_password, users=new_users)
 
     # Assemble new payload
     payload = {

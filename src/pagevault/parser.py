@@ -5,7 +5,6 @@ and replacing with encrypted versions.
 """
 
 import re
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,14 +22,31 @@ from .crypto import (
 )
 
 
-@dataclass
-class EncryptedRegion:
-    """Represents an encrypted region in the HTML."""
+def _parse_html(html: str) -> BeautifulSoup:
+    """Parse HTML with lxml, falling back to html.parser.
 
-    original_content: str
-    encrypted_data: str
-    hint: str | None
-    remember: str | None
+    lxml is preferred for speed and accuracy; html.parser is always
+    available as a fallback when lxml is not installed.
+    """
+    try:
+        return BeautifulSoup(html, "lxml")
+    except Exception:
+        return BeautifulSoup(html, "html.parser")
+
+
+def _set_wrapper_attrs(
+    wrapper: Tag,
+    hint: str | None,
+    title: str | None,
+    remember: str | None,
+) -> None:
+    """Apply optional hint/title/remember attributes to a wrapper tag."""
+    if hint:
+        wrapper["hint"] = hint
+    if title:
+        wrapper["title"] = title
+    if remember:
+        wrapper["remember"] = remember
 
 
 def mark_elements(
@@ -55,10 +71,7 @@ def mark_elements(
     if not selectors:
         return html
 
-    try:
-        soup = BeautifulSoup(html, "lxml")
-    except Exception:
-        soup = BeautifulSoup(html, "html.parser")
+    soup = _parse_html(html)
 
     for selector in selectors:
         for element in soup.select(selector):
@@ -71,16 +84,8 @@ def mark_elements(
             if element.parent and element.parent.name == "pagevault":
                 continue
 
-            # Create wrapper element
             wrapper = soup.new_tag("pagevault")
-            if hint:
-                wrapper["hint"] = hint
-            if title:
-                wrapper["title"] = title
-            if remember:
-                wrapper["remember"] = remember
-
-            # Wrap the element
+            _set_wrapper_attrs(wrapper, hint, title, remember)
             element.wrap(wrapper)
 
     return str(soup)
@@ -106,40 +111,26 @@ def mark_body(
     Returns:
         Modified HTML with body content wrapped, or unchanged if no body/empty body.
     """
-    try:
-        soup = BeautifulSoup(html, "lxml")
-    except Exception:
-        soup = BeautifulSoup(html, "html.parser")
+    soup = _parse_html(html)
 
     body = soup.find("body")
     if not body:
         return html
 
     # Check for real content (not just whitespace)
-    has_content = False
-    for child in body.children:
-        if isinstance(child, Tag):
-            has_content = True
-            break
-        if isinstance(child, NavigableString) and child.strip():
-            has_content = True
-            break
+    has_content = any(
+        isinstance(child, Tag) or (isinstance(child, NavigableString) and child.strip())
+        for child in body.children
+    )
 
     if not has_content:
         return html
 
-    # Create wrapper element
     wrapper = soup.new_tag("pagevault")
-    if hint:
-        wrapper["hint"] = hint
-    if title:
-        wrapper["title"] = title
-    if remember:
-        wrapper["remember"] = remember
+    _set_wrapper_attrs(wrapper, hint, title, remember)
 
     # Move all body children into the wrapper
-    children = list(body.children)
-    for child in children:
+    for child in list(body.children):
         child.extract()
         wrapper.append(child)
 
@@ -228,11 +219,7 @@ def lock_html(
     if not has_pagevault_elements(html):
         return html  # No changes needed
 
-    # Parse with lxml for better handling, fall back to html.parser
-    try:
-        soup = BeautifulSoup(html, "lxml")
-    except Exception:
-        soup = BeautifulSoup(html, "html.parser")
+    soup = _parse_html(html)
 
     elements = find_pagevault_elements(soup)
 
@@ -287,14 +274,13 @@ def lock_html(
         element["data-encrypted"] = encrypted_data
         element["data-content-hash"] = hash_value
 
-        if hint:
-            element["data-hint"] = hint
-
-        if title:
-            element["data-title"] = title
-
-        if remember:
-            element["data-remember"] = remember
+        for attr_name, value in (
+            ("hint", hint),
+            ("title", title),
+            ("remember", remember),
+        ):
+            if value:
+                element[f"data-{attr_name}"] = value
 
         # Set data-mode when multi-user
         if users:
@@ -332,10 +318,7 @@ def unlock_html(
     if not has_pagevault_elements(html):
         return html
 
-    try:
-        soup = BeautifulSoup(html, "lxml")
-    except Exception:
-        soup = BeautifulSoup(html, "html.parser")
+    soup = _parse_html(html)
 
     elements = find_pagevault_elements(soup)
 
@@ -378,11 +361,6 @@ def unlock_html(
                     "Content hash mismatch: decryption may be corrupted"
                 )
 
-        # Preserve attributes for re-encryption
-        hint = element.get("data-hint")
-        title = element.get("data-title")
-        remember = element.get("data-remember")
-
         # Replace element content
         element.clear()
 
@@ -392,24 +370,19 @@ def unlock_html(
         for child in list(decrypted_soup.children):
             element.append(child)
 
-        # Remove encrypted attributes, keep original ones
-        del element["data-encrypted"]
-        if "data-content-hash" in element.attrs:
-            del element["data-content-hash"]
-        if "data-mode" in element.attrs:
-            del element["data-mode"]
-        if "data-hint" in element.attrs:
-            del element["data-hint"]
-            if hint:
-                element["hint"] = hint
-        if "data-title" in element.attrs:
-            del element["data-title"]
-            if title:
-                element["title"] = title
-        if "data-remember" in element.attrs:
-            del element["data-remember"]
-            if remember:
-                element["remember"] = remember
+        # Remove internal attributes
+        for attr in ("data-encrypted", "data-content-hash", "data-mode"):
+            if attr in element.attrs:
+                del element[attr]
+
+        # Restore original attributes from their data-* counterparts
+        for attr in ("hint", "title", "remember"):
+            data_attr = f"data-{attr}"
+            value = element.get(data_attr)
+            if data_attr in element.attrs:
+                del element[data_attr]
+            if value:
+                element[attr] = value
 
         decrypted_any = True
 
@@ -446,10 +419,7 @@ def sync_html_keys(
     if not has_pagevault_elements(html):
         return html
 
-    try:
-        soup = BeautifulSoup(html, "lxml")
-    except Exception:
-        soup = BeautifulSoup(html, "html.parser")
+    soup = _parse_html(html)
 
     elements = find_pagevault_elements(soup)
 
@@ -1204,7 +1174,7 @@ def process_file(
     Raises:
         PagevaultError: If processing fails.
     """
-    # Resolve mode from either parameter
+    # Resolve mode: explicit `mode` wins, then legacy `encrypt_mode`, default = lock
     if mode is not None:
         do_lock = mode == "lock"
     elif encrypt_mode is not None:
@@ -1218,12 +1188,11 @@ def process_file(
         raise PagevaultError(f"Cannot read file {input_path}: {e}") from e
 
     if do_lock:
-        salt = config.salt if config else None
         processed = lock_html(
             html,
             password=password,
             config=config,
-            salt=salt,
+            salt=config.salt if config else None,
             custom_css=custom_css,
             users=users,
             meta=meta,
@@ -1246,11 +1215,8 @@ def process_file(
     return True
 
 
-# Backward-compatibility aliases
+# Backward-compatibility aliases (tested by test_parser.py)
 encrypt_html = lock_html
 decrypt_html = unlock_html
 wrap_elements_for_encryption = mark_elements
 wrap_body_for_encryption = mark_body
-# Alias for old function names
-find_lockhtml_elements = find_pagevault_elements
-has_lockhtml_elements = has_pagevault_elements

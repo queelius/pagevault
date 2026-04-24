@@ -104,10 +104,6 @@ class PagevaultConfig:
                 )
 
 
-# Backward-compatibility alias
-LockhtmlConfig = PagevaultConfig
-
-
 def get_global_config_path() -> Path:
     """Return the global config file path.
 
@@ -239,10 +235,8 @@ def load_config(
             if config.users:
                 # Warn about password conflicts
                 for username in global_users:
-                    if (
-                        username in config.users
-                        and str(global_users[username])
-                        != str(config.users[username])
+                    if username in config.users and str(global_users[username]) != str(
+                        config.users[username]
                     ):
                         print(
                             f"Note: user '{username}' has different passwords in "

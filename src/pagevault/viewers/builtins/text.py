@@ -57,5 +57,9 @@ class TextViewer(ViewerPlugin):
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
   .pagevault-text-viewer { background: #1a1a2a; color: #e0e0e0; }
-  .pagevault-text-viewer .line-numbers { background: #252535; border-right-color: #444; color: #666; }
+  .pagevault-text-viewer .line-numbers {
+    background: #252535;
+    border-right-color: #444;
+    color: #666;
+  }
 }"""

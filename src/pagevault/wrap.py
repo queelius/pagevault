@@ -6,7 +6,6 @@ that can be decrypted and rendered in the browser.
 
 import logging
 import mimetypes
-import re
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -20,14 +19,12 @@ from .crypto import (
 )
 from .viewers import discover_viewers, resolve_viewer
 
-logger = logging.getLogger(__name__)
-
 # Defense-in-depth: re-validate viewer names before JS injection even though
 # ViewerPlugin.__init_subclass__ already checks at class definition time.
-_SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
-_SAFE_MIME_RE = re.compile(
-    r"^[a-zA-Z0-9][a-zA-Z0-9!#$&\-^_.+]*/(\*|[a-zA-Z0-9][a-zA-Z0-9!#$&\-^_.+]*)$"
-)
+# Regexes defined in viewers.base are the single source of truth.
+from .viewers.base import _SAFE_MIME_RE, _SAFE_NAME_RE
+
+logger = logging.getLogger(__name__)
 
 # MIME type detection
 MIME_OVERRIDES = {
@@ -53,6 +50,45 @@ def detect_mime(path: Path) -> str:
 
     mime, _ = mimetypes.guess_type(str(path))
     return mime or "application/octet-stream"
+
+
+def _encrypt_payload(
+    data: bytes,
+    meta: dict,
+    password: str | None,
+    users: dict[str, str] | None,
+    config: PagevaultConfig | None,
+    pad: bool,
+) -> tuple[dict, list[str]]:
+    """Hash, optionally pad, then v3-chunk-encrypt raw bytes.
+
+    Returns the envelope (with ``content_hash`` added) and the list of
+    base64-encoded chunk ciphertexts. Shared by :func:`wrap_file` and
+    :func:`wrap_site` — they differ only in how ``data`` and ``meta`` are
+    built.
+    """
+    hash_value = content_hash_bytes(data)
+    use_pad = pad or (config and config.pad)
+    payload = pad_content_bytes(data) if use_pad else data
+
+    envelope, chunks = encrypt_chunked(
+        payload,
+        password=password,
+        salt=config.salt if config else None,
+        users=users,
+        meta=meta,
+    )
+    envelope["content_hash"] = hash_value
+    return envelope, chunks
+
+
+def _write_wrap_output(output_path: Path, html: str) -> None:
+    """Create parent dirs and write the wrapped HTML output."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        output_path.write_text(html, encoding="utf-8")
+    except OSError as e:
+        raise PagevaultError(f"Cannot write output {output_path}: {e}") from e
 
 
 def wrap_file(
@@ -88,10 +124,7 @@ def wrap_file(
     except OSError as e:
         raise PagevaultError(f"Cannot read file {file_path}: {e}") from e
 
-    # Detect MIME type
     mime = detect_mime(file_path)
-
-    # Build metadata
     meta = {
         "type": "file",
         "filename": file_path.name,
@@ -99,31 +132,7 @@ def wrap_file(
         "size": len(file_bytes),
     }
 
-    # Get salt from config
-    salt = config.salt if config else None
-
-    # Compute content hash for integrity (before padding, on raw bytes)
-    hash_value = content_hash_bytes(file_bytes)
-
-    # Apply content padding if requested (pad raw bytes)
-    use_pad = pad or (config and config.pad)
-    data_to_encrypt = pad_content_bytes(file_bytes) if use_pad else file_bytes
-
-    # Encrypt using v3 chunked format (raw bytes, no base64 layer)
-    envelope, chunks = encrypt_chunked(
-        data_to_encrypt,
-        password=password,
-        salt=salt,
-        users=users,
-        meta=meta,
-    )
-
-    # Add content hash to envelope for integrity verification
-    envelope["content_hash"] = hash_value
-
-    # Determine output path
-    if output_path is None:
-        output_path = file_path.with_suffix(".html")
+    envelope, chunks = _encrypt_payload(file_bytes, meta, password, users, config, pad)
 
     # Discover active viewers and resolve dependencies for this file type
     viewers = discover_viewers(config)
@@ -131,7 +140,6 @@ def wrap_file(
     matching_viewer = resolve_viewer(mime, viewers)
     viewer_deps = matching_viewer.dependencies() if matching_viewer else []
 
-    # Generate v3 HTML
     html = _generate_wrap_html_v3(
         envelope=envelope,
         chunks=chunks,
@@ -142,14 +150,10 @@ def wrap_file(
         users=users,
     )
 
-    # Write output
+    if output_path is None:
+        output_path = file_path.with_suffix(".html")
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        output_path.write_text(html, encoding="utf-8")
-    except OSError as e:
-        raise PagevaultError(f"Cannot write output {output_path}: {e}") from e
-
+    _write_wrap_output(output_path, html)
     return output_path
 
 
@@ -205,41 +209,14 @@ def wrap_site(
         )
 
     zip_bytes = zip_buffer.getvalue()
-
-    # Build metadata
     meta = {
         "type": "site",
         "entry": entry,
         "files": file_list,
     }
 
-    # Get salt from config
-    salt = config.salt if config else None
+    envelope, chunks = _encrypt_payload(zip_bytes, meta, password, users, config, pad)
 
-    # Compute content hash on raw bytes (before padding)
-    hash_value = content_hash_bytes(zip_bytes)
-
-    # Apply content padding if requested (pad raw bytes)
-    use_pad = pad or (config and config.pad)
-    data_to_encrypt = pad_content_bytes(zip_bytes) if use_pad else zip_bytes
-
-    # Encrypt using v3 chunked format (raw bytes, no base64 layer)
-    envelope, chunks = encrypt_chunked(
-        data_to_encrypt,
-        password=password,
-        salt=salt,
-        users=users,
-        meta=meta,
-    )
-
-    # Add content hash to envelope for integrity verification
-    envelope["content_hash"] = hash_value
-
-    # Determine output path
-    if output_path is None:
-        output_path = dir_path.parent / f"{dir_path.name}.html"
-
-    # Generate v3 HTML.
     # Site mode uses its own renderer (__pagevault_renderSite) that handles
     # all file types via data URIs inside the site iframe. Individual file
     # viewers are not needed — the site's own HTML/CSS/JS runs inside the
@@ -255,14 +232,10 @@ def wrap_site(
         entry=entry,
     )
 
-    # Write output
+    if output_path is None:
+        output_path = dir_path.parent / f"{dir_path.name}.html"
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        output_path.write_text(html, encoding="utf-8")
-    except OSError as e:
-        raise PagevaultError(f"Cannot write output {output_path}: {e}") from e
-
+    _write_wrap_output(output_path, html)
     return output_path
 
 
@@ -278,7 +251,6 @@ def _log_active_viewers(viewers: list) -> None:
             ", ".join(viewer.mime_types),
             source,
         )
-
 
 
 def _html_escape(s: str) -> str:
@@ -453,7 +425,6 @@ pagevault[data-decrypted] {{
 """
 
 
-
 def _escape_for_script_block(s: str) -> str:
     """Escape content for safe embedding inside a <script> or <style> block.
 
@@ -501,7 +472,6 @@ def _build_viewer_dispatch(viewers: list) -> tuple[str, str]:
                 dispatch_entries.append("    '" + mime_type + "': " + var_name)
 
     return "\n\n".join(viewer_defs_parts), ",\n".join(dispatch_entries)
-
 
 
 def _get_progress_css() -> str:

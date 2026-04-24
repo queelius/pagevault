@@ -1,5 +1,6 @@
 """Command-line interface for pagevault."""
 
+import re
 import sys
 from pathlib import Path
 
@@ -9,7 +10,6 @@ import yaml
 from . import __version__
 from .config import (
     CONFIG_FILENAME,
-    config_to_dict,
     create_default_config,
     create_global_config,
     find_config_file,
@@ -18,14 +18,22 @@ from .config import (
     load_global_config,
     update_config_users,
 )
-from .crypto import PagevaultError, salt_to_hex
+from .crypto import PagevaultError
 from .parser import (
+    _parse_html,
     has_pagevault_elements,
     mark_body,
     mark_elements,
     process_file,
     sync_html_keys,
 )
+
+HTML_EXTENSIONS = frozenset({".html", ".htm"})
+
+
+def _is_html(path: Path) -> bool:
+    """True if path has an HTML file extension."""
+    return path.suffix.lower() in HTML_EXTENSIONS
 
 
 @click.group()
@@ -198,7 +206,7 @@ def _determine_operation_mode(
     for path_str in paths:
         path = Path(path_str)
         if path.is_file():
-            if path.suffix.lower() in {".html", ".htm"}:
+            if _is_html(path):
                 html_files.append(path)
             else:
                 non_html_files.append(path)
@@ -228,7 +236,6 @@ def _validate_flags_for_mode(
     title: str | None,
     output_dir: str | None,
     output_path: str | None,
-    entry: str,
     recursive: bool,
     wrap_flag: bool = False,
 ) -> None:
@@ -620,28 +627,21 @@ def lock(
         raise click.UsageError("No files or directories specified")
 
     # 1. Determine operation mode
-    try:
-        mode, target_paths = _determine_operation_mode(paths, site, recursive, wrap)
-    except click.UsageError:
-        raise
+    mode, target_paths = _determine_operation_mode(paths, site, recursive, wrap)
 
     # 2. Validate flags for mode
-    try:
-        _validate_flags_for_mode(
-            mode,
-            selectors,
-            css_path,
-            selector_hint,
-            selector_remember,
-            selector_title,
-            output_dir,
-            output_path,
-            entry,
-            recursive,
-            wrap_flag=wrap,
-        )
-    except click.UsageError:
-        raise
+    _validate_flags_for_mode(
+        mode,
+        selectors,
+        css_path,
+        selector_hint,
+        selector_remember,
+        selector_title,
+        output_dir,
+        output_path,
+        recursive,
+        wrap_flag=wrap,
+    )
 
     # 3. Load configuration
     try:
@@ -651,13 +651,10 @@ def lock(
             password_override=password,
         )
     except PagevaultError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
 
     # 4. Resolve password and users
-    try:
-        users, pwd = _resolve_password_and_users(config, password, username)
-    except click.UsageError:
-        raise
+    users, pwd = _resolve_password_and_users(config, password, username)
 
     # 4b. Apply --users filter if specified
     if user_filter:
@@ -672,21 +669,17 @@ def lock(
         users = {u: users[u] for u in requested}
 
     # 5. Route to appropriate handler
-    if mode == "lock_html":
-        # HTML locking: set default output directory
-        if output_dir is None:
-            output_dir = "_locked"
-            click.echo(f"Writing to {output_dir}/ (use -d to change)")
-        output_base = Path(output_dir)
+    effective_pad = pad or config.pad
+    out_opt = Path(output_path) if output_path else None
 
-        # Collect HTML files
+    if mode == "lock_html":
+        output_base = _default_output_dir(output_dir, "_locked")
         files = _collect_files(tuple(str(p) for p in target_paths), recursive)
 
         if not files:
             click.echo("No HTML files found")
             return
 
-        # Process HTML files
         processed, skipped = _lock_html_files(
             files,
             config,
@@ -700,7 +693,7 @@ def lock(
             selector_remember,
             selector_title,
             paths,
-            pad=pad or config.pad,
+            pad=effective_pad,
         )
 
         click.echo(f"\n{processed} file(s) locked, {skipped} skipped")
@@ -709,44 +702,30 @@ def lock(
         # File wrapping (non-HTML, or HTML with --wrap)
         if wrap and not output_path:
             # --wrap mode: use -d directory logic (like lock_html)
-            if output_dir is None:
-                output_dir = "_locked"
-                click.echo(f"Writing to {output_dir}/ (use -d to change)")
-            output_base = Path(output_dir)
+            output_base = _default_output_dir(output_dir, "_locked")
             output_base.mkdir(parents=True, exist_ok=True)
             for path in target_paths:
                 # HTML files keep their name; non-HTML get .html suffix
-                if path.suffix.lower() in {".html", ".htm"}:
-                    dest = output_base / path.name
-                else:
-                    dest = output_base / f"{path.name}.html"
-                _wrap_single_file(
-                    path, config, users, pwd, dest, dry_run, pad=pad or config.pad
-                )
-        else:
-            for path in target_paths:
+                dest_name = path.name if _is_html(path) else f"{path.name}.html"
                 _wrap_single_file(
                     path,
                     config,
                     users,
                     pwd,
-                    Path(output_path) if output_path else None,
+                    output_base / dest_name,
                     dry_run,
-                    pad=pad or config.pad,
+                    pad=effective_pad,
+                )
+        else:
+            for path in target_paths:
+                _wrap_single_file(
+                    path, config, users, pwd, out_opt, dry_run, pad=effective_pad
                 )
 
     elif mode == "wrap_site":
-        # Site wrapping
         for path in target_paths:
             _wrap_site_directory(
-                path,
-                config,
-                users,
-                pwd,
-                Path(output_path) if output_path else None,
-                entry,
-                dry_run,
-                pad=pad or config.pad,
+                path, config, users, pwd, out_opt, entry, dry_run, pad=effective_pad
             )
 
 
@@ -845,7 +824,7 @@ def unlock(
         try:
             content = input_path.read_text(encoding="utf-8")
         except OSError as e:
-            raise click.ClickException(f"Cannot read {input_path}: {e}")
+            raise click.ClickException(f"Cannot read {input_path}: {e}") from e
 
         if not has_pagevault_elements(content):
             raise click.ClickException("File has no encrypted pagevault elements")
@@ -853,16 +832,12 @@ def unlock(
         try:
             decrypted = unlock_html(content, pwd, username=user)
         except PagevaultError as e:
-            raise click.ClickException(str(e))
+            raise click.ClickException(str(e)) from e
 
         click.echo(decrypted, nl=False)
         return
 
-    # Set default output directory
-    if output_dir is None:
-        output_dir = "_unlocked"
-        click.echo(f"Writing to {output_dir}/ (use -d to change)")
-    output_base = Path(output_dir)
+    output_base = _default_output_dir(output_dir, "_unlocked")
 
     # Collect files to process
     files = _collect_files(paths, recursive)
@@ -961,17 +936,7 @@ def sync(paths, recursive, config_path, dry_run, rekey):
     if paths:
         files = _collect_files(paths, recursive)
     elif config.managed and config.config_path:
-        # Resolve managed globs relative to config file location
-        config_dir = config.config_path.parent
-        files = []
-        for pattern in config.managed:
-            matched = sorted(config_dir.glob(pattern))
-            files.extend(
-                f
-                for f in matched
-                if f.is_file() and f.suffix.lower() in {".html", ".htm"}
-            )
-        files = sorted(set(files))
+        files = _resolve_managed_html_files(config.config_path.parent, config.managed)
     else:
         raise click.ClickException(
             "No paths specified and no 'managed' globs in config."
@@ -1035,8 +1000,6 @@ def info(path):
       pagevault info encrypted.html
       pagevault info _locked/index.html
     """
-    import re
-
     from .crypto import inspect_payload
 
     file_path = Path(path)
@@ -1051,13 +1014,7 @@ def info(path):
     if not has_pagevault_elements(content):
         raise click.ClickException("File has no pagevault elements")
 
-    # Parse HTML to extract encrypted regions
-    from bs4 import BeautifulSoup
-
-    try:
-        soup = BeautifulSoup(content, "lxml")
-    except Exception:
-        soup = BeautifulSoup(content, "html.parser")
+    soup = _parse_html(content)
 
     # Check for v3 chunked format (pv-meta script tag)
     pv_meta_el = soup.find("script", {"id": "pv-meta"})
@@ -1069,7 +1026,7 @@ def info(path):
         try:
             envelope = json.loads(pv_meta_el.string)
         except (json.JSONDecodeError, TypeError) as e:
-            raise click.ClickException(f"Invalid pv-meta JSON: {e}")
+            raise click.ClickException(f"Invalid pv-meta JSON: {e}") from e
 
         info_data = inspect_payload_v3(envelope)
 
@@ -1099,25 +1056,7 @@ def info(path):
             mode = pv_el.get("data-mode", "single")
             click.echo(f"Mode:           {mode}")
 
-        # Runtime info (same as v2)
-        runtime_scripts = soup.find_all("script", {"data-pagevault-runtime": True})
-        runtime_styles = soup.find_all("style", {"data-pagevault-runtime": True})
-        click.echo(f"Runtime scripts: {len(runtime_scripts)}")
-        click.echo(f"Runtime styles:  {len(runtime_styles)}")
-
-        # Check for viewer dispatch table
-        viewer_re = r"'([a-z]+/[a-z0-9*+\-.]+)':\s*__pv_"
-        for script in runtime_scripts:
-            script_text = script.string or ""
-            viewer_matches = re.findall(viewer_re, script_text)
-            if viewer_matches:
-                click.echo(f"Viewers:         {', '.join(viewer_matches)}")
-
-        # Check for JSZip (site mode indicator)
-        jszip_present = any("ZipReader" in (s.string or "") for s in runtime_scripts)
-        if jszip_present:
-            click.echo("JSZip shim:      yes")
-
+        _print_runtime_info(soup)
         click.echo(f"pagevault:       v{__version__}")
         return
 
@@ -1154,13 +1093,9 @@ def info(path):
             if "iv_length" in info_data:
                 click.echo(f"  IV:           {info_data['iv_length']} bytes")
             if "ciphertext_length" in info_data:
-                ct_len = info_data["ciphertext_length"]
-                if ct_len < 1024:
-                    click.echo(f"  Ciphertext:   {ct_len} B")
-                elif ct_len < 1048576:
-                    click.echo(f"  Ciphertext:   {ct_len / 1024:.1f} KB")
-                else:
-                    click.echo(f"  Ciphertext:   {ct_len / 1048576:.1f} MB")
+                click.echo(
+                    f"  Ciphertext:   {_format_size(info_data['ciphertext_length'])}"
+                )
         except PagevaultError as e:
             click.echo(f"  Error parsing payload: {e}")
 
@@ -1175,18 +1110,7 @@ def info(path):
             click.echo(f"  Remember:     {remember}")
         click.echo()
 
-    # Viewer info: check for embedded viewer scripts
-    runtime_scripts = soup.find_all("script", {"data-pagevault-runtime": True})
-    runtime_styles = soup.find_all("style", {"data-pagevault-runtime": True})
-    click.echo(f"Runtime scripts: {len(runtime_scripts)}")
-    click.echo(f"Runtime styles:  {len(runtime_styles)}")
-
-    # Check for viewer dispatch table
-    for script in runtime_scripts:
-        script_text = script.string or ""
-        viewer_matches = re.findall(r"'([a-z]+/[a-z0-9*+\-.]+)':\s*__pv_", script_text)
-        if viewer_matches:
-            click.echo(f"Viewers:         {', '.join(viewer_matches)}")
+    _print_runtime_info(soup)
 
     # Check for wrap type
     wrap_el = soup.find("pagevault", {"data-wrap-type": True})
@@ -1197,12 +1121,24 @@ def info(path):
         if wrap_el.get("data-entry"):
             click.echo(f"Entry point:     {wrap_el.get('data-entry')}")
 
-    # Check for JSZip (site mode indicator)
-    jszip_present = any("ZipReader" in (s.string or "") for s in runtime_scripts)
-    if jszip_present:
-        click.echo("JSZip shim:      yes")
-
     click.echo(f"pagevault:       v{__version__}")
+
+
+def _print_runtime_info(soup) -> None:
+    """Print runtime-script/style/viewer/jszip info for the ``info`` command."""
+    runtime_scripts = soup.find_all("script", {"data-pagevault-runtime": True})
+    runtime_styles = soup.find_all("style", {"data-pagevault-runtime": True})
+    click.echo(f"Runtime scripts: {len(runtime_scripts)}")
+    click.echo(f"Runtime styles:  {len(runtime_styles)}")
+
+    viewer_re = r"'([a-z]+/[a-z0-9*+\-.]+)':\s*__pv_"
+    for script in runtime_scripts:
+        viewer_matches = re.findall(viewer_re, script.string or "")
+        if viewer_matches:
+            click.echo(f"Viewers:         {', '.join(viewer_matches)}")
+
+    if any("ZipReader" in (s.string or "") for s in runtime_scripts):
+        click.echo("JSZip shim:      yes")
 
 
 @main.command()
@@ -1330,21 +1266,13 @@ def audit(config_path):
         )
 
     # --- File integrity (check managed files if available) ---
-    managed_files = []
+    managed_files: list[Path] = []
     if cfg.managed and cfg.config_path:
-        config_dir = cfg.config_path.parent
-        for pattern in cfg.managed:
-            matched = sorted(config_dir.glob(pattern))
-            managed_files.extend(
-                f
-                for f in matched
-                if f.is_file() and f.suffix.lower() in {".html", ".htm"}
-            )
-        managed_files = sorted(set(managed_files))
+        managed_files = _resolve_managed_html_files(
+            cfg.config_path.parent, cfg.managed
+        )
 
     if managed_files:
-        from bs4 import BeautifulSoup
-
         checked = 0
         for file_path in managed_files:
             try:
@@ -1356,10 +1284,7 @@ def audit(config_path):
             if not has_pagevault_elements(html):
                 continue
 
-            try:
-                soup = BeautifulSoup(html, "lxml")
-            except Exception:
-                soup = BeautifulSoup(html, "html.parser")
+            soup = _parse_html(html)
 
             for el in soup.find_all("pagevault", {"data-encrypted": True}):
                 if el.get("data-content-hash"):
@@ -1433,13 +1358,7 @@ def check(path, password, username):
     if not has_pagevault_elements(content):
         raise click.ClickException("File has no pagevault elements")
 
-    # Parse to find first encrypted region
-    from bs4 import BeautifulSoup
-
-    try:
-        soup = BeautifulSoup(content, "lxml")
-    except Exception:
-        soup = BeautifulSoup(content, "html.parser")
+    soup = _parse_html(content)
 
     # Check for v3 chunked format first
     pv_meta_el = soup.find("script", {"id": "pv-meta"})
@@ -1451,12 +1370,12 @@ def check(path, password, username):
         try:
             envelope = json.loads(pv_meta_el.string)
         except (json.JSONDecodeError, TypeError) as e:
-            raise click.ClickException(f"Invalid pv-meta JSON: {e}")
+            raise click.ClickException(f"Invalid pv-meta JSON: {e}") from e
 
         try:
             result = verify_password_v3(envelope, password, username=username)
         except PagevaultError as e:
-            raise click.ClickException(str(e))
+            raise click.ClickException(str(e)) from e
 
         if result:
             click.echo("Password correct")
@@ -1598,9 +1517,15 @@ def config_show(config_path, show_passwords):
     global_path = get_global_config_path()
 
     if not has_local and not has_global:
-        click.echo("No config found (no local .pagevault.yaml and no global config).", err=True)
+        click.echo(
+            "No config found (no local .pagevault.yaml and no global config).",
+            err=True,
+        )
         click.echo("Run 'pagevault config init' to create a local config.", err=True)
-        click.echo("Run 'pagevault config init --global' to create a global config.", err=True)
+        click.echo(
+            "Run 'pagevault config init --global' to create a global config.",
+            err=True,
+        )
         sys.exit(1)
 
     local_data: dict = {}
@@ -1672,9 +1597,11 @@ def config_show(config_path, show_passwords):
     global_defaults = global_data.get("defaults", {})
     if local_defaults or global_defaults:
         click.echo("defaults:")
+        local_d = local_defaults if isinstance(local_defaults, dict) else {}
+        global_d = global_defaults if isinstance(global_defaults, dict) else {}
         for key in ["remember", "remember_days", "auto_prompt"]:
-            l_val = local_defaults.get(key) if isinstance(local_defaults, dict) else None
-            g_val = global_defaults.get(key) if isinstance(global_defaults, dict) else None
+            l_val = local_d.get(key)
+            g_val = global_d.get(key)
             if l_val is not None:
                 source = "local (overrides global)" if g_val is not None else "local"
                 click.echo(f"  {key}: {l_val}  # {source}")
@@ -1749,21 +1676,12 @@ def config_set(key, value, is_global, unset, config_path):
     if not unset and value is None:
         raise click.ClickException(f"Provide a value or use --unset to remove '{key}'.")
 
-    try:
-        if is_global:
-            raw = _load_raw_global()
-            use_global = True
-        else:
-            resolved, use_global = _resolve_config_path(config_path, fallback_global=True)
-            with open(resolved) as f:
-                raw = yaml.safe_load(f) or {}
-    except FileNotFoundError as e:
-        raise click.ClickException(str(e))
+    raw, resolved, use_global = _load_raw_config(is_global, config_path)
+    target = "global" if (is_global or use_global) else "local"
 
     if unset:
         if key in raw:
             del raw[key]
-        target = "global" if (is_global or use_global) else "local"
         click.echo(f"Unset '{key}' ({target}).")
     else:
         # Type coerce for known keys
@@ -1775,7 +1693,6 @@ def config_set(key, value, is_global, unset, config_path):
             )
             click.echo("Consider using -p on the command line instead.")
         raw[key] = value
-        target = "global" if (is_global or use_global) else "local"
         display_value = str(value).lower() if isinstance(value, bool) else value
         click.echo(f"Set '{key}' = '{display_value}' ({target}).")
 
@@ -1785,7 +1702,7 @@ def config_set(key, value, is_global, unset, config_path):
         else:
             _save_local(resolved, raw)
     except (PagevaultError, OSError) as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
 
 
 @config.group()
@@ -1794,7 +1711,9 @@ def user():
     pass
 
 
-def _resolve_config_path(config_path: str | None, fallback_global: bool = False) -> tuple[Path, bool]:
+def _resolve_config_path(
+    config_path: str | None, fallback_global: bool = False
+) -> tuple[Path, bool]:
     """Find config file from explicit path, directory traversal, or global fallback.
 
     Args:
@@ -1828,6 +1747,27 @@ def _load_raw_global() -> dict:
         raise FileNotFoundError(f"Global config not found: {path}")
     with open(path) as f:
         return yaml.safe_load(f) or {}
+
+
+def _load_raw_config(
+    is_global: bool, config_path: str | None
+) -> tuple[dict, Path | None, bool]:
+    """Load raw YAML from the target config (global or local).
+
+    Returns (data, resolved_path, use_global). ``resolved_path`` is None
+    when ``is_global`` was explicitly requested. ``use_global`` is True
+    whenever the loaded file is the global config (explicit or fallback).
+
+    Raises click.ClickException if no config file can be located.
+    """
+    try:
+        if is_global:
+            return _load_raw_global(), None, True
+        resolved, use_global = _resolve_config_path(config_path, fallback_global=True)
+        with open(resolved) as f:
+            return yaml.safe_load(f) or {}, resolved, use_global
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e)) from e
 
 
 def _save_local(path: Path, data: dict) -> None:
@@ -1873,18 +1813,7 @@ def user_add(username, user_password, is_global, config_path):
             f"Username '{username}' cannot contain ':' (used as delimiter)."
         )
 
-    # Load config
-    try:
-        if is_global:
-            raw = _load_raw_global()
-            use_global = True
-        else:
-            resolved, use_global = _resolve_config_path(config_path, fallback_global=True)
-            with open(resolved) as f:
-                raw = yaml.safe_load(f) or {}
-    except FileNotFoundError as e:
-        raise click.ClickException(str(e))
-
+    raw, resolved, use_global = _load_raw_config(is_global, config_path)
     users = raw.get("users", {}) or {}
 
     if username in users:
@@ -1911,7 +1840,7 @@ def user_add(username, user_password, is_global, config_path):
         else:
             update_config_users(resolved, users)
     except PagevaultError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
 
     click.echo(f"Added user '{username}' ({target}).")
     click.echo("Run 'pagevault sync' to update encrypted files for the new user.")
@@ -1932,17 +1861,7 @@ def user_rm(username, is_global, config_path):
 
     Use --global to remove from your global config instead.
     """
-    try:
-        if is_global:
-            raw = _load_raw_global()
-            use_global = True
-        else:
-            resolved, use_global = _resolve_config_path(config_path, fallback_global=True)
-            with open(resolved) as f:
-                raw = yaml.safe_load(f) or {}
-    except FileNotFoundError as e:
-        raise click.ClickException(str(e))
-
+    raw, resolved, use_global = _load_raw_config(is_global, config_path)
     users = raw.get("users", {}) or {}
 
     if username not in users:
@@ -1975,7 +1894,7 @@ def user_rm(username, is_global, config_path):
         else:
             _save_local(resolved, raw)
     except PagevaultError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
 
     click.echo(f"Removed user '{username}' ({target}).")
     if cleared_default:
@@ -1984,7 +1903,12 @@ def user_rm(username, is_global, config_path):
 
 
 @user.command("list")
-@click.option("--global", "is_global", is_flag=True, help="List only global config users")
+@click.option(
+    "--global",
+    "is_global",
+    is_flag=True,
+    help="List only global config users",
+)
 @click.option(
     "-c",
     "--config",
@@ -2046,17 +1970,7 @@ def user_passwd(username, user_password, is_global, config_path):
 
     Use --global to update the password in your global config instead.
     """
-    try:
-        if is_global:
-            raw = _load_raw_global()
-            use_global = True
-        else:
-            resolved, use_global = _resolve_config_path(config_path, fallback_global=True)
-            with open(resolved) as f:
-                raw = yaml.safe_load(f) or {}
-    except FileNotFoundError as e:
-        raise click.ClickException(str(e))
-
+    raw, resolved, use_global = _load_raw_config(is_global, config_path)
     users = raw.get("users", {}) or {}
 
     if username not in users:
@@ -2079,7 +1993,7 @@ def user_passwd(username, user_password, is_global, config_path):
         else:
             update_config_users(resolved, users)
     except PagevaultError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
 
     click.echo(f"Password updated for '{username}' ({target}).")
     click.echo("Run 'pagevault sync' to update encrypted files.")
@@ -2095,24 +2009,40 @@ def _collect_files(paths: tuple, recursive: bool) -> list[Path]:
     Returns:
         List of HTML file paths.
     """
-    files = []
-    html_extensions = {".html", ".htm"}
+    files: list[Path] = []
+    glob = Path.rglob if recursive else Path.glob
 
     for path_str in paths:
         path = Path(path_str)
-
-        if path.is_file():
-            if path.suffix.lower() in html_extensions:
-                files.append(path)
+        if path.is_file() and _is_html(path):
+            files.append(path)
         elif path.is_dir():
-            if recursive:
-                for ext in html_extensions:
-                    files.extend(path.rglob(f"*{ext}"))
-            else:
-                for ext in html_extensions:
-                    files.extend(path.glob(f"*{ext}"))
+            for ext in HTML_EXTENSIONS:
+                files.extend(glob(path, f"*{ext}"))
 
     return sorted(set(files))
+
+
+def _resolve_managed_html_files(
+    config_dir: Path, patterns: list[str]
+) -> list[Path]:
+    """Expand managed glob patterns (relative to config_dir) to HTML files."""
+    files: list[Path] = []
+    for pattern in patterns:
+        files.extend(
+            f
+            for f in sorted(config_dir.glob(pattern))
+            if f.is_file() and _is_html(f)
+        )
+    return sorted(set(files))
+
+
+def _default_output_dir(output_dir: str | None, default: str) -> Path:
+    """Return output_dir as Path, or default after informing the user."""
+    if output_dir is None:
+        output_dir = default
+        click.echo(f"Writing to {output_dir}/ (use -d to change)")
+    return Path(output_dir)
 
 
 def _get_output_path(input_path: Path, source_paths: tuple, output_base: Path) -> Path:
@@ -2166,8 +2096,20 @@ def _relative_path(path: Path) -> str:
 
 @main.command()
 @click.argument("directory", default=".", type=click.Path(exists=True))
-@click.option("-P", "--port", default=8765, type=int, help="Port number (default: 8765)")
-@click.option("-o", "--open", "open_browser", is_flag=True, help="Open browser automatically")
+@click.option(
+    "-P",
+    "--port",
+    default=8765,
+    type=int,
+    help="Port number (default: 8765)",
+)
+@click.option(
+    "-o",
+    "--open",
+    "open_browser",
+    is_flag=True,
+    help="Open browser automatically",
+)
 def serve(directory, port, open_browser):
     """Serve directory over local HTTP for previewing encrypted files.
 
@@ -2184,7 +2126,9 @@ def serve(directory, port, open_browser):
     import http.server
     import webbrowser
 
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directory)
+    handler = functools.partial(
+        http.server.SimpleHTTPRequestHandler, directory=directory
+    )
     try:
         with http.server.HTTPServer(("", port), handler) as httpd:
             url = f"http://localhost:{port}"
