@@ -11,31 +11,7 @@ class AudioViewer(ViewerPlugin):
     priority = 0
 
     def js(self) -> str:
-        return """async function(container, blob, url, meta, toolbar) {
-    container.className = 'pagevault-viewer pagevault-audio-viewer';
-    var audio = document.createElement('audio');
-    audio.controls = true;
-    audio.src = url;
-    container.appendChild(audio);
-}"""
+        return self._load_js_asset("audio.js")
 
     def css(self) -> str:
-        return """
-/* Audio viewer */
-.pagevault-audio-viewer {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 200px;
-  padding: 2rem;
-  background: #f5f5f5;
-}
-.pagevault-audio-viewer audio {
-  width: 100%;
-  max-width: 600px;
-}
-
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-  .pagevault-audio-viewer { background: #1a1a2a; }
-}"""
+        return self._load_css_asset("audio.css")
