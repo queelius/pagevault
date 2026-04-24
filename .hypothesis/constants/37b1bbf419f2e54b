@@ -1,4 +1,0 @@
-# file: /home/spinoza/github/repos/pagevault/src/pagevault/__init__.py
-# hypothesis_version: 6.139.2
-
-['0.3.2', 'PagevaultError', '__version__', 'decrypt', 'decrypt_html', 'encrypt', 'encrypt_html', 'lock_html', 'mark_body', 'mark_elements', 'rewrap_keys', 'unlock_html']

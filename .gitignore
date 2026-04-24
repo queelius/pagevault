@@ -67,3 +67,4 @@ Thumbs.db
 
 # Ad-hoc screenshots in repo root (use docs/ for intentional screenshots)
 /*.png
+.hypothesis/

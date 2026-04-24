@@ -1,4 +1,0 @@
-# file: /home/spinoza/github/repos/pagevault/src/pagevault/crypto.py
-# hypothesis_version: 6.139.2
-
-[b'\x00', 255, 310000, 1048576, 'aes-256-gcm', 'alg', 'algorithm', 'ascii', 'c', 'chunk_count', 'chunk_size', 'ciphertext_length', 'ct', 'iter', 'iterations', 'iv', 'iv_base', 'iv_length', 'kdf', 'key_count', 'keys', 'm', 'meta_ct', 'meta_iv', 'pbkdf2-sha256', 'replace', 'salt', 'salt_hex', 'salt_length', 'total_size', 'unknown', 'utf-8', 'v', 'version']

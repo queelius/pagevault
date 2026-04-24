@@ -1,4 +1,0 @@
-# file: /home/spinoza/github/repos/pagevault/src/pagevault/parser.py
-# hypothesis_version: 6.139.2
-
-['\x00', '<pagevault[\\s>]', 'body', 'data-content-hash', 'data-encrypted', 'data-hint', 'data-mode', 'data-remember', 'data-title', 'encrypted_at', 'head', 'hint', 'html', 'html.parser', 'lock', 'lxml', 'pagevault', 'remember', 'script', 'style', 'title', 'true', 'user', 'utf-8', 'version']

@@ -1,4 +1,0 @@
-# file: /home/spinoza/github/repos/pagevault/src/pagevault/viewers/builtins/markdown.py
-# hypothesis_version: 6.139.2
-
-['markdown', 'marked.min.js', 'text/markdown', 'utf-8', 'vendor']

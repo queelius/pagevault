@@ -1,4 +1,0 @@
-# file: /home/spinoza/github/repos/pagevault/src/pagevault/config.py
-# hypothesis_version: 6.139.2
-
-['#4CAF50', '#76B852', '***', '.config', '.pagevault.yaml', ':', 'Enter password', 'Enter username', 'Incorrect password', 'PAGEVAULT_PASSWORD', 'PAGEVAULT_SALT', 'Protected Content', 'Unlock', 'XDG_CONFIG_HOME', 'ask', 'auto_prompt', 'button_text', 'color_primary', 'color_secondary', 'config.yaml', 'config_path', 'css_file', 'defaults', 'error_text', 'local', 'managed', 'none', 'pad', 'pagevault', 'password', 'placeholder', 'remember', 'remember_days', 'salt', 'session', 'template', 'title', 'user', 'username_placeholder', 'users', 'utf-8', 'viewers', 'viewers_dir']

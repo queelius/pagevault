@@ -1,4 +1,0 @@
-# file: /home/spinoza/github/repos/pagevault/src/pagevault/wrap.py
-# hypothesis_version: 6.139.2
-
-["    '", '  var ', ' = ', '"', '&', '&amp;', '&gt;', '&lt;', '&quot;', "': ", '*', ',\n', ', ', '.', '.html', '.markdown', '.md', '.svg', '.webp', '/', ';', '<', '</', '<\\/', '>', '\\', '__pv_', 'content_hash', 'data-mode="user"', 'entry', 'file', 'filename', 'files', 'image/svg+xml', 'image/webp', 'index.html', 'mime', 'site', 'size', 'text/markdown', 'type', 'utf-8', 'w']
