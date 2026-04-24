@@ -38,6 +38,15 @@ def _js_string(s: str) -> str:
     )
 
 
+def _escape_for_script_block(s: str) -> str:
+    """Escape content for safe embedding inside <script> or <style> blocks.
+
+    Replaces ``</`` with ``<\\/`` to prevent premature closing of the
+    enclosing HTML tag.
+    """
+    return s.replace("</", "<\\/")
+
+
 def _make_config_prelude(template: TemplateConfig, defaults: DefaultsConfig) -> str:
     """Build a JavaScript CONFIG object from TemplateConfig and DefaultsConfig.
 

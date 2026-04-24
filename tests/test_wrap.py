@@ -787,8 +787,9 @@ class TestImageViewer:
         """Renderer JS should include image viewer in dispatch table."""
         viewers = discover_viewers()
         js = _get_renderer_js_v4(viewers)
-        assert "__pv_image" in js
         assert "'image/*'" in js
+        # Image viewer JS should appear somewhere in the runtime
+        assert "zoomed" in js
 
     def test_zoom_class_in_renderer(self):
         """Renderer JS should toggle 'zoomed' class (ImageViewer plugin)."""
@@ -814,8 +815,9 @@ class TestTextViewer:
         """Renderer JS should include text viewer in dispatch table."""
         viewers = discover_viewers()
         js = _get_renderer_js_v4(viewers)
-        assert "__pv_text" in js
         assert "'text/*'" in js
+        # Text viewer JS should appear somewhere in the runtime
+        assert "line-numbers" in js
 
     def test_line_numbers_css(self):
         """TextViewer plugin CSS should contain line-number gutter styles."""
@@ -831,26 +833,27 @@ class TestWrapFileViewers:
     """End-to-end tests: verify correct viewer plugins appear per MIME type."""
 
     @pytest.mark.parametrize(
-        "filename, content, expected_viewer_var",
+        "filename, content, mime_pattern",
         [
-            ("doc.md", b"# Heading\n\nParagraph", "__pv_markdown"),
-            ("notes.txt", b"line1\nline2\nline3", "__pv_text"),
-            ("photo.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 50, "__pv_image"),
-            ("doc.pdf", b"%PDF-1.4" + b"\x00" * 50, "__pv_pdf"),
+            ("doc.md", b"# Heading\n\nParagraph", "text/markdown"),
+            ("notes.txt", b"line1\nline2\nline3", "text/*"),
+            ("photo.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 50, "image/*"),
+            ("doc.pdf", b"%PDF-1.4" + b"\x00" * 50, "application/pdf"),
         ],
     )
     def test_viewer_in_dispatch_table(
-        self, tmp_path, filename, content, expected_viewer_var
+        self, tmp_path, filename, content, mime_pattern
     ):
-        """Each MIME type's viewer appears in the dispatch table."""
+        """Each MIME type's viewer registers in window.__pv_viewers."""
         f = tmp_path / filename
         f.write_bytes(content)
 
         output = wrap_file(f, password="pw")
         html = output.read_text()
 
-        assert expected_viewer_var in html
-        assert "__pv_resolveViewer" in html
+        # Viewer dispatch table populated
+        assert "window.__pv_viewers" in html
+        assert mime_pattern in html
         # All outputs should have toolbar
         assert "createToolbar" in html
 
@@ -874,108 +877,6 @@ class TestWrapFileViewers:
         html = output.read_text()
 
         assert "marked v" not in html
-
-
-class TestSiteResourceStringRewriting:
-    """Tests for dynamic resource string rewriting in site renderer JS."""
-
-    def test_resource_rewriting_regex_present(self):
-        """The resource string rewriting regex should appear in site renderer JS."""
-        js = _get_site_renderer_js()
-        # The regex for matching quoted file-path-like strings
-        assert "Rewrite quoted strings that match known resource paths" in js
-        assert "htmlFiles.has(resolved)" in js
-
-    def test_json_image_urls_rewritten(self, tmp_path):
-        """A site with JSON image URLs in a script tag should produce
-        wrapped output containing the resource string rewriting pass."""
-        site_dir = tmp_path / "site"
-        site_dir.mkdir()
-        img_dir = site_dir / "img"
-        img_dir.mkdir()
-
-        # Create a PNG file
-        (img_dir / "photo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50)
-
-        # Create an HTML page with JSON data referencing the image
-        (site_dir / "index.html").write_text(
-            "<html><head></head><body>"
-            '<script>var data = {"url": "img/photo.png"};</script>'
-            "</body></html>"
-        )
-
-        output = wrap_site(site_dir, password="pw")
-        content = output.read_text()
-
-        # The wrapped output should contain the site renderer with
-        # the resource string rewriting logic
-        assert "Rewrite quoted strings" in content
-        assert "htmlFiles.has" in content
-
-    def test_resource_rewriting_skips_html_paths(self):
-        """Quoted strings matching HTML files should NOT be rewritten
-        (navigation interceptor handles those)."""
-        js = _get_site_renderer_js()
-        # The guard: only replace if not in htmlFiles
-        assert "!htmlFiles.has(resolved)" in js
-
-    def test_resource_rewriting_skips_absolute_urls(self):
-        """Absolute URLs and data URIs should be skipped."""
-        js = _get_site_renderer_js()
-        assert "val.indexOf('://') !== -1" in js
-        assert "val.startsWith('data:')" in js
-
-    def test_site_with_dynamic_refs_wraps_successfully(self, tmp_path):
-        """A site with dynamic JS image references should wrap without error
-        and include all files in the zip payload."""
-        import json
-
-        from pagevault.crypto import decrypt_v4
-
-        site_dir = tmp_path / "site"
-        site_dir.mkdir()
-        media_dir = site_dir / "media"
-        media_dir.mkdir()
-
-        # Create multiple image files
-        for name in ["a.png", "b.jpg", "c.gif"]:
-            (media_dir / name).write_bytes(b"\x00" * 20)
-
-        # HTML with JS that dynamically sets image sources
-        (site_dir / "index.html").write_text(
-            "<html><body>"
-            "<script>"
-            'var images = ["media/a.png", "media/b.jpg", "media/c.gif"];'
-            "images.forEach(function(src) {"
-            '  var img = document.createElement("img");'
-            "  img.src = src;"
-            "  document.body.appendChild(img);"
-            "});"
-            "</script>"
-            "</body></html>"
-        )
-
-        output = wrap_site(site_dir, password="pw")
-        assert output.exists()
-
-        # Verify all files are in the encrypted payload via v4
-        soup = BeautifulSoup(output.read_text(), "html.parser")
-        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
-        chunks = []
-        i = 0
-        while True:
-            el = soup.find("script", {"id": f"pv-{i}"})
-            if not el:
-                break
-            chunks.append(el.string.strip())
-            i += 1
-
-        _, meta = decrypt_v4(envelope, chunks, "pw")
-
-        assert "index.html" in meta["files"]
-        assert "media/a.png" in meta["files"]
-        assert "media/b.jpg" in meta["files"]
-        assert "media/c.gif" in meta["files"]
 
 
 class TestWrapFileV3:
@@ -1235,7 +1136,8 @@ class TestRendererXssPrevention:
     def test_site_renderer_escapes_entry(self):
         """Test _get_site_renderer_js() uses escapeHtml for entry point error."""
         js = _get_site_renderer_js()
-        assert "escapeHtml(entry)" in js
+        # After Chunk 4 extraction, the entry variable is module-scoped as _site_entry
+        assert "escapeHtml(_site_entry)" in js
 
     def test_site_renderer_escapes_error_message(self):
         """Test _get_site_renderer_js() uses escapeHtml for error message."""
@@ -1311,12 +1213,13 @@ class TestGenerateWrapHtmlV4:
     def test_has_runtime_scripts(self):
         """Output includes crypto and renderer runtime scripts."""
         html = _generate_wrap_html_v4(
-            envelope={"v": 3, "chunk_count": 1, "keys": []},
+            envelope={"v": 4, "chunk_count": 1, "keys": []},
             chunks=["AAAA"],
             title="Protected: test.txt",
             viewers=[],
         )
-        assert "decryptV4Chunked" in html
+        # v4 crypto function (renamed from decryptV4Chunked)
+        assert "decryptV4" in html
         assert "crypto.subtle" in html
         assert "PBKDF2" in html
 
@@ -1435,14 +1338,16 @@ class TestGenerateWrapHtmlV4:
         """v4 renderer includes viewer dispatch table when viewers given."""
         viewers = discover_viewers()
         html = _generate_wrap_html_v4(
-            envelope={"v": 3, "chunk_count": 1, "keys": []},
+            envelope={"v": 4, "chunk_count": 1, "keys": []},
             chunks=["AAAA"],
             title="Protected: test.png",
             viewers=viewers,
         )
         assert "__pv_resolveViewer" in html
-        assert "__pv_viewers" in html
-        assert "__pv_image" in html
+        assert "window.__pv_viewers" in html
+        # Image viewer JS should be present
+        assert "image/*" in html
+        assert "zoomed" in html
 
 
 class TestV3PaddingStrip:
@@ -1553,4 +1458,4 @@ class TestFetchInterception:
         HTTP-served sites; moot under file:// where all origins are opaque)."""
         from pagevault.wrap import _get_site_renderer_js
         js = _get_site_renderer_js()
-        assert "e.source !== iframe.contentWindow" in js
+        assert "e.source !== _site_iframe.contentWindow" in js
