@@ -1,7 +1,5 @@
 """Tests for the pagevault runtime module (build_region_js)."""
 
-import pytest
-
 from pagevault.config import DefaultsConfig, TemplateConfig
 from pagevault.runtime import build_region_js
 

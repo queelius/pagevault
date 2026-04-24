@@ -6,7 +6,6 @@ from bs4 import BeautifulSoup
 from pagevault.config import DefaultsConfig, PagevaultConfig, TemplateConfig
 from pagevault.crypto import PagevaultError, content_hash, decrypt, generate_salt
 from pagevault.parser import (
-    _js_string,
     extract_element_content,
     find_pagevault_elements,
     has_pagevault_elements,
@@ -17,6 +16,7 @@ from pagevault.parser import (
     sync_html_keys,
     unlock_html,
 )
+from pagevault.runtime._loader import _js_string
 
 
 class TestMarkElements:
