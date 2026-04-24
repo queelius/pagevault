@@ -1000,8 +1000,6 @@ def info(path):
       pagevault info encrypted.html
       pagevault info _locked/index.html
     """
-    from .crypto import inspect_payload
-
     file_path = Path(path)
     if not file_path.is_file():
         raise click.ClickException(f"Not a file: {file_path}")
@@ -1016,7 +1014,7 @@ def info(path):
 
     soup = _parse_html(content)
 
-    # Check for v3 chunked format (pv-meta script tag)
+    # Check for wrap-level v4 envelope (pv-meta script tag at document level)
     pv_meta_el = soup.find("script", {"id": "pv-meta"})
     if pv_meta_el:
         import json
@@ -1031,7 +1029,7 @@ def info(path):
         info_data = inspect_payload_v3(envelope)
 
         click.echo(f"File: {_relative_path(file_path)}")
-        click.echo("Format:         v3 chunked")
+        click.echo("Format:         v4 chunked (wrap)")
         click.echo(f"Version:        v{info_data['version']}")
         click.echo(f"Algorithm:      {info_data['algorithm']}")
         click.echo(f"KDF:            {info_data['kdf']}")
@@ -1068,9 +1066,13 @@ def info(path):
         click.echo(f"pagevault:       v{__version__}")
         return
 
-    # --- v2 region-encrypted format ---
+    # --- v4 region-encrypted format: envelopes inside <pagevault data-pv-v4> ---
+    import json
+
+    from .crypto import inspect_payload_v3
+
     elements = soup.find_all("pagevault")
-    encrypted_regions = [el for el in elements if el.has_attr("data-encrypted")]
+    encrypted_regions = [el for el in elements if el.has_attr("data-pv-v4")]
 
     if not encrypted_regions:
         raise click.ClickException("No encrypted regions found")
@@ -1080,8 +1082,6 @@ def info(path):
     click.echo()
 
     for i, el in enumerate(encrypted_regions):
-        payload = el.get("data-encrypted", "")
-        content_hash_val = el.get("data-content-hash", "")
         mode = el.get("data-mode", "single")
         hint = el.get("data-hint", "")
         title = el.get("data-title", "")
@@ -1089,27 +1089,30 @@ def info(path):
 
         click.echo(f"--- Region {i + 1} ---")
 
-        try:
-            info_data = inspect_payload(payload)
-            click.echo(f"  Version:      v{info_data['version']}")
-            click.echo(f"  Algorithm:    {info_data['algorithm']}")
-            click.echo(f"  KDF:          {info_data['kdf']}")
-            click.echo(f"  Iterations:   {info_data['iterations']:,}")
-            click.echo(f"  Key blobs:    {info_data['key_count']}")
-            if "salt_length" in info_data:
-                click.echo(f"  Salt:         {info_data['salt_length']} bytes")
-            if "iv_length" in info_data:
-                click.echo(f"  IV:           {info_data['iv_length']} bytes")
-            if "ciphertext_length" in info_data:
-                click.echo(
-                    f"  Ciphertext:   {_format_size(info_data['ciphertext_length'])}"
-                )
-        except PagevaultError as e:
-            click.echo(f"  Error parsing payload: {e}")
+        meta_script = None
+        for child in el.find_all("script", recursive=False):
+            if child.has_attr("data-pv-meta"):
+                meta_script = child
+                break
+
+        if meta_script is None or not meta_script.string:
+            click.echo("  Error: missing pv-meta script")
+        else:
+            try:
+                envelope = json.loads(meta_script.string)
+                info_data = inspect_payload_v3(envelope)
+                click.echo(f"  Version:      v{info_data['version']}")
+                click.echo(f"  Algorithm:    {info_data['algorithm']}")
+                click.echo(f"  KDF:          {info_data['kdf']}")
+                click.echo(f"  Iterations:   {info_data['iterations']:,}")
+                click.echo(f"  Key blobs:    {info_data['key_count']}")
+                click.echo(f"  Chunk size:   {_format_size(info_data['chunk_size'])}")
+                click.echo(f"  Chunks:       {info_data['chunk_count']}")
+                click.echo(f"  Total size:   {_format_size(info_data['total_size'])}")
+            except (json.JSONDecodeError, PagevaultError) as e:
+                click.echo(f"  Error parsing envelope: {e}")
 
         click.echo(f"  Mode:         {mode}")
-        if content_hash_val:
-            click.echo(f"  Content hash: {content_hash_val}")
         if hint:
             click.echo(f"  Hint:         {hint}")
         if title:
@@ -1294,8 +1297,13 @@ def audit(config_path):
 
             soup = _parse_html(html)
 
-            for el in soup.find_all("pagevault", {"data-encrypted": True}):
-                if el.get("data-content-hash"):
+            for el in soup.find_all("pagevault", attrs={"data-pv-v4": True}):
+                # In v4, content_hash lives inside the encrypted envelope
+                # metadata, not as a DOM attribute. Existence of a
+                # data-pv-meta script is the marker for an integrity-capable
+                # region; validating the hash requires decryption (not done
+                # in audit, which is password-free).
+                if el.find("script", attrs={"data-pv-meta": True}, recursive=False):
                     checked += 1
 
         if checked > 0:
@@ -1352,7 +1360,6 @@ def check(path, password, username):
     """
     if not password:
         password = click.prompt("Password", hide_input=True)
-    from .crypto import verify_password
 
     file_path = Path(path)
     if not file_path.is_file():
@@ -1368,43 +1375,40 @@ def check(path, password, username):
 
     soup = _parse_html(content)
 
-    # Check for v3 chunked format first
+    import json
+
+    from .crypto import verify_password_v3
+
+    # Check wrap-level v4 envelope first (document-level pv-meta script)
     pv_meta_el = soup.find("script", {"id": "pv-meta"})
+    envelope = None
     if pv_meta_el:
-        import json
-
-        from .crypto import verify_password_v3
-
         try:
             envelope = json.loads(pv_meta_el.string)
         except (json.JSONDecodeError, TypeError) as e:
             raise click.ClickException(f"Invalid pv-meta JSON: {e}") from e
-
+    else:
+        # Fall through to region-level v4: find the first <pagevault data-pv-v4>
+        # and grab its child <script data-pv-meta>.
+        encrypted_el = soup.find("pagevault", attrs={"data-pv-v4": True})
+        if not encrypted_el:
+            raise click.ClickException("No encrypted regions found")
+        meta_script = None
+        for child in encrypted_el.find_all("script", recursive=False):
+            if child.has_attr("data-pv-meta"):
+                meta_script = child
+                break
+        if meta_script is None or not meta_script.string:
+            raise click.ClickException("Missing pv-meta script in region")
         try:
-            result = verify_password_v3(envelope, password, username=username)
-        except PagevaultError as e:
-            raise click.ClickException(str(e)) from e
-
-        if result:
-            click.echo("Password correct")
-            raise SystemExit(0)
-        else:
-            click.echo("Password incorrect")
-            raise SystemExit(1)
-
-    # Fall through to v2 region-encrypted check
-    encrypted_el = soup.find("pagevault", {"data-encrypted": True})
-    if not encrypted_el:
-        raise click.ClickException("No encrypted regions found")
-
-    payload = encrypted_el.get("data-encrypted", "")
-    if not payload:
-        raise click.ClickException("Empty encrypted payload")
+            envelope = json.loads(meta_script.string)
+        except json.JSONDecodeError as e:
+            raise click.ClickException(f"Invalid region envelope JSON: {e}") from e
 
     try:
-        result = verify_password(payload, password, username=username)
+        result = verify_password_v3(envelope, password, username=username)
     except PagevaultError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
 
     if result:
         click.echo("Password correct")

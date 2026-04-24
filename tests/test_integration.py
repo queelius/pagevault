@@ -104,7 +104,7 @@ class TestHtmlOutput:
         # Encrypted element present
         lock_elem = soup.find("pagevault")
         assert lock_elem is not None
-        assert lock_elem.has_attr("data-encrypted")
+        assert lock_elem.has_attr("data-pv-v4")
         assert lock_elem.has_attr("data-hint")
         assert lock_elem["data-hint"] == "Contact admin for password"
 
@@ -252,7 +252,7 @@ class TestFullWorkflow:
         ).exists() else ""
 
         # Index is encrypted
-        assert "data-encrypted=" in index_encrypted
+        assert "data-pv-v4" in index_encrypted
         assert "Member Content" not in index_encrypted
         assert "Public footer" in index_encrypted
 
@@ -418,7 +418,7 @@ class TestMultiUserWorkflow:
         for username, password in users.items():
             decrypted = unlock_html(encrypted, password, username=username)
             assert "Team secret content" in decrypted
-            assert "data-encrypted" not in decrypted
+            assert "data-pv-v4" not in decrypted
 
     def test_sync_after_adding_user(self):
         """Test encrypt with alice, add bob via sync, bob can decrypt."""
@@ -520,7 +520,7 @@ class TestBodyWrapWorkflow:
         # Encrypt
         encrypted = lock_html(wrapped, "password")
         assert "Welcome" not in encrypted
-        assert "data-encrypted=" in encrypted
+        assert "data-pv-v4" in encrypted
 
         # Decrypt
         decrypted = unlock_html(encrypted, "password")
@@ -615,18 +615,21 @@ class TestV3WrapIntegration:
         envelope = json.loads(meta_el.string)
         assert envelope["v"] == 3
 
-    def test_region_encryption_still_v2(self, tmp_path):
-        """HTML region encryption (parser.py) still uses v2."""
+    def test_region_encryption_uses_v4(self, tmp_path):
+        """HTML region encryption (parser.py) produces v4 envelopes."""
         html = "<pagevault>Secret content</pagevault>"
         encrypted = lock_html(html, "password")
 
         soup = BeautifulSoup(encrypted, "html.parser")
         pv = soup.find("pagevault")
-        assert pv.has_attr("data-encrypted")
+        assert pv.has_attr("data-pv-v4")
 
-        # Verify it's v2
-        payload = json.loads(base64.b64decode(pv["data-encrypted"]))
-        assert payload["v"] == 2
+        meta_script = pv.find("script", attrs={"data-pv-meta": True})
+        assert meta_script is not None
+        envelope = json.loads(meta_script.string)
+        # v4 uses the chunked envelope schema end-to-end for regions
+        assert "iv_base" in envelope
+        assert "meta_ct" in envelope
 
     def test_multi_chunk_file(self, tmp_path):
         """File larger than chunk_size produces multiple chunks."""

@@ -157,7 +157,7 @@ class TestMarkElements:
 
         # Content should be encrypted
         assert "Secret content" not in encrypted
-        assert "data-encrypted=" in encrypted
+        assert "data-pv-v4" in encrypted
 
 
 class TestHasPagevaultElements:
@@ -236,8 +236,8 @@ class TestIsAlreadyEncrypted:
     """Tests for is_already_encrypted function."""
 
     def test_encrypted_element(self):
-        """Test detecting encrypted element."""
-        html = '<pagevault data-encrypted="ciphertext"></pagevault>'
+        """Test detecting encrypted element (v4 marker)."""
+        html = "<pagevault data-pv-v4></pagevault>"
         soup = BeautifulSoup(html, "html.parser")
         element = soup.find("pagevault")
 
@@ -263,6 +263,13 @@ class TestLockHtml:
         assert "data-pv-meta" in locked
         assert 'data-pv-chunk="0"' in locked
         assert "data-encrypted=" not in locked
+
+    def test_v4_roundtrip(self):
+        """Lock and unlock a simple document via v4 round-trip."""
+        html = "<html><body><pagevault>Secret</pagevault></body></html>"
+        locked = lock_html(html, password="pw")
+        unlocked = unlock_html(locked, password="pw")
+        assert "Secret" in unlocked
 
     def test_basic_encryption(self):
         """Test basic HTML encryption."""
@@ -333,13 +340,24 @@ class TestLockHtml:
 
         Previously we re-encrypted, which silently destroyed the original
         payload (because the element's inner content was already cleared,
-        so we were re-encrypting the empty string). Now we skip."""
-        html = '<pagevault data-encrypted="x">Already encrypted</pagevault>'
+        so we were re-encrypting the empty string). Now we skip.
+
+        In v4, the marker attribute is data-pv-v4 and the ciphertext lives
+        in <script data-pv-meta>/<script data-pv-chunk="N"> children.
+        """
+        html = (
+            "<pagevault data-pv-v4>"
+            '<script type="application/json" data-pv-meta>'
+            '{"v":4,"sentinel":"keep-me"}</script>'
+            '<script type="x-pv" data-pv-chunk="0">AAAA</script>'
+            "</pagevault>"
+        )
 
         result = lock_html(html, "password")
 
-        # Ciphertext preserved, not overwritten
-        assert 'data-encrypted="x"' in result
+        # Existing envelope preserved, not overwritten
+        assert '"sentinel":"keep-me"' in result
+        assert "AAAA" in result
 
     def test_uses_explicit_salt(self):
         """Test encryption uses explicit salt."""
@@ -349,17 +367,23 @@ class TestLockHtml:
         result1 = lock_html(html, "password", salt=salt)
         result2 = lock_html(html, "password", salt=salt)
 
-        # Both should decrypt correctly with same password
-        soup1 = BeautifulSoup(result1, "html.parser")
-        soup2 = BeautifulSoup(result2, "html.parser")
+        # Both should decrypt correctly with same password via unlock_html
+        assert "Secret" in unlock_html(result1, "password")
+        assert "Secret" in unlock_html(result2, "password")
 
-        encrypted1 = soup1.find("pagevault")["data-encrypted"]
-        encrypted2 = soup2.find("pagevault")["data-encrypted"]
+        # Both envelopes should use the same salt (hex-encoded in the envelope)
+        import json as _json
+        import re as _re
 
-        content1, _meta1 = decrypt(encrypted1, "password")
-        assert content1 == "Secret"
-        content2, _meta2 = decrypt(encrypted2, "password")
-        assert content2 == "Secret"
+        def extract_envelope(locked):
+            m = _re.search(r'<script[^>]*data-pv-meta[^>]*>([^<]+)</script>', locked)
+            assert m is not None, "Envelope script not found"
+            return _json.loads(m.group(1))
+
+        env1 = extract_envelope(result1)
+        env2 = extract_envelope(result2)
+        assert env1["salt"] == salt.hex()
+        assert env2["salt"] == salt.hex()
 
 
 class TestUnlockHtml:
@@ -373,7 +397,7 @@ class TestUnlockHtml:
         decrypted = unlock_html(encrypted, "password")
 
         assert "Secret content" in decrypted
-        assert "data-encrypted" not in decrypted
+        assert "data-pv-v4" not in decrypted
 
     def test_roundtrip_preserves_content(self):
         """Test encrypt/decrypt roundtrip preserves content."""
@@ -453,7 +477,7 @@ class TestMultipleElements:
         # Both should be encrypted
         assert "First" not in result
         assert "Second" not in result
-        assert result.count("data-encrypted=") == 2
+        assert result.count("data-pv-v4") == 2
         assert 'data-hint="hint1"' in result
         assert 'data-hint="hint2"' in result
 
@@ -476,22 +500,29 @@ class TestMultipleElements:
         """lock_html() on a document with a mix of already-encrypted and
         plaintext <pagevault> elements: preserves the former, encrypts
         the latter. The final document has both encrypted."""
-        from pagevault.crypto import encrypt as crypto_encrypt
-
-        enc1 = crypto_encrypt("Already encrypted", password="password")
+        # Build a pre-existing v4 envelope by locking one element first.
+        first_html = "<pagevault>Already encrypted</pagevault>"
+        first_locked = lock_html(first_html, "password")
+        # Extract just the <pagevault ...>...</pagevault> block
+        soup = BeautifulSoup(first_locked, "html.parser")
+        existing_elem = soup.find("pagevault")
+        existing_markup = str(existing_elem)
 
         html = f"""
-        <pagevault data-encrypted="{enc1}"></pagevault>
+        {existing_markup}
         <pagevault>New content</pagevault>
         """
 
         result = lock_html(html, "password")
 
-        # Both end up encrypted in the output
-        assert result.count("data-encrypted=") == 2
+        # Both end up with v4 envelope in the output
+        assert result.count("data-pv-v4") == 2
         assert "New content" not in result
-        # The pre-existing ciphertext is PRESERVED (not overwritten)
-        assert f'data-encrypted="{enc1}"' in result
+        # The pre-existing envelope is PRESERVED: unlock should return
+        # "Already encrypted" for the first region.
+        decrypted = unlock_html(result, "password")
+        assert "Already encrypted" in decrypted
+        assert "New content" in decrypted
 
 
 class TestTemplateCustomization:
@@ -573,26 +604,63 @@ class TestTemplateCustomization:
 
 
 class TestContentHashIntegrity:
-    """Tests for content hash storage and verification."""
+    """Tests for content hash storage and verification.
+
+    In v4, content_hash is carried inside the encrypted metadata payload
+    (envelope.meta.content_hash after decrypt_chunked), not as a DOM
+    attribute. These tests decrypt the envelope to verify the hash.
+    """
+
+    @staticmethod
+    def _extract_meta(locked_html: str, password: str = "password", username=None):
+        """Extract decrypted envelope metadata from a locked HTML string."""
+        import json as _json
+
+        from pagevault.crypto import decrypt_chunked
+
+        soup = BeautifulSoup(locked_html, "html.parser")
+        results = []
+        for pv in soup.find_all("pagevault"):
+            if not pv.has_attr("data-pv-v4"):
+                continue
+            meta_script = pv.find("script", attrs={"data-pv-meta": True})
+            if not meta_script or not meta_script.string:
+                continue
+            envelope = _json.loads(meta_script.string)
+            chunks = [
+                c.string or ""
+                for c in sorted(
+                    pv.find_all("script", attrs={"data-pv-chunk": True}),
+                    key=lambda s: int(s["data-pv-chunk"]),
+                )
+            ]
+            _, meta = decrypt_chunked(envelope, chunks, password, username=username)
+            results.append(meta)
+        return results
 
     def test_hash_stored_in_encrypted_element(self):
-        """Test that content hash is stored during encryption."""
+        """Content hash is stored in the encrypted envelope metadata."""
         html = "<pagevault>Secret content</pagevault>"
         expected_hash = content_hash("Secret content")
 
         result = lock_html(html, "password")
-
-        assert f'data-content-hash="{expected_hash}"' in result
+        metas = self._extract_meta(result)
+        assert len(metas) == 1
+        assert metas[0]["content_hash"] == expected_hash
 
     def test_hash_removed_after_decryption(self):
-        """Test that content hash is removed during decryption."""
+        """No hash/v4 markers survive after unlocking."""
         html = "<pagevault>Secret content</pagevault>"
 
         encrypted = lock_html(html, "password")
-        assert "data-content-hash=" in encrypted
+        # Envelope carries a hash
+        metas = self._extract_meta(encrypted)
+        assert "content_hash" in metas[0]
 
         decrypted = unlock_html(encrypted, "password")
-        assert "data-content-hash=" not in decrypted
+        assert "data-pv-v4" not in decrypted
+        assert "data-content-hash" not in decrypted
+        assert "data-pv-meta" not in decrypted
 
     def test_hash_preserved_through_roundtrip(self):
         """Test content matches after encrypt/decrypt roundtrip."""
@@ -602,8 +670,8 @@ class TestContentHashIntegrity:
 
         encrypted = lock_html(html, "password")
 
-        # Verify hash is stored
-        assert f'data-content-hash="{original_hash}"' in encrypted
+        metas = self._extract_meta(encrypted)
+        assert metas[0]["content_hash"] == original_hash
 
         decrypted = unlock_html(encrypted, "password")
 
@@ -617,8 +685,8 @@ class TestContentHashIntegrity:
         expected_hash = content_hash(content)
 
         result = lock_html(html, "パスワード")
-
-        assert f'data-content-hash="{expected_hash}"' in result
+        metas = self._extract_meta(result, password="パスワード")
+        assert metas[0]["content_hash"] == expected_hash
 
     def test_hash_with_empty_content(self):
         """Test hash works with empty content."""
@@ -626,8 +694,8 @@ class TestContentHashIntegrity:
         expected_hash = content_hash("")
 
         result = lock_html(html, "password")
-
-        assert f'data-content-hash="{expected_hash}"' in result
+        metas = self._extract_meta(result)
+        assert metas[0]["content_hash"] == expected_hash
 
     def test_multiple_elements_have_correct_hashes(self):
         """Test multiple elements each get their own correct hash."""
@@ -639,9 +707,9 @@ class TestContentHashIntegrity:
         hash2 = content_hash("Second content")
 
         result = lock_html(html, "password")
-
-        assert f'data-content-hash="{hash1}"' in result
-        assert f'data-content-hash="{hash2}"' in result
+        metas = self._extract_meta(result)
+        hashes = {m["content_hash"] for m in metas}
+        assert hashes == {hash1, hash2}
 
 
 class TestComposableEncryption:
@@ -657,7 +725,7 @@ class TestComposableEncryption:
         html = "<pagevault>Secret</pagevault>"
 
         encrypted1 = lock_html(html, "password1")
-        assert "data-encrypted=" in encrypted1
+        assert "data-pv-v4" in encrypted1
 
         # Second lock is idempotent on the already-encrypted element
         encrypted2 = lock_html(encrypted1, "password2")
@@ -665,11 +733,11 @@ class TestComposableEncryption:
         soup1 = BeautifulSoup(encrypted1, "html.parser")
         soup2 = BeautifulSoup(encrypted2, "html.parser")
 
-        data1 = soup1.find("pagevault")["data-encrypted"]
-        data2 = soup2.find("pagevault")["data-encrypted"]
+        env1 = soup1.find("pagevault").find("script", attrs={"data-pv-meta": True}).string
+        env2 = soup2.find("pagevault").find("script", attrs={"data-pv-meta": True}).string
 
-        # Ciphertext PRESERVED (password1 is still the correct password)
-        assert data1 == data2
+        # Envelope preserved (password1 still decrypts)
+        assert env1 == env2
 
     def test_nested_encryption_via_wrapping(self):
         """Test nested encryption by wrapping encrypted element in new wrapper."""
@@ -680,7 +748,7 @@ class TestComposableEncryption:
 
         # First encrypt with inner password
         encrypted1 = lock_html(html, "inner")
-        assert "data-encrypted=" in encrypted1
+        assert "data-pv-v4" in encrypted1
         assert "Secret" not in encrypted1
 
         # Wrap the encrypted element in a new pagevault
@@ -693,12 +761,12 @@ class TestComposableEncryption:
         soup = BeautifulSoup(encrypted2, "html.parser")
         encrypted_elements = soup.find_all("pagevault")
         outer = encrypted_elements[0]
-        assert outer.has_attr("data-encrypted")
+        assert outer.has_attr("data-pv-v4")
 
         # Decrypt outer layer
         decrypted1 = unlock_html(encrypted2, "outer")
         # Should still have inner encryption
-        assert "data-encrypted=" in decrypted1
+        assert "data-pv-v4" in decrypted1
         assert "Secret" not in decrypted1
 
         # Decrypt inner layer
@@ -727,11 +795,11 @@ class TestComposableEncryption:
         elements = soup.find_all("pagevault")
         assert len(elements) == 1
 
-        # The ciphertext is PRESERVED (not re-encrypted with password2)
+        # Envelope PRESERVED (not re-encrypted with password2)
         soup1 = BeautifulSoup(encrypted1, "html.parser")
-        data1 = soup1.find("pagevault")["data-encrypted"]
-        data2 = elements[0]["data-encrypted"]
-        assert data1 == data2
+        env1 = soup1.find("pagevault").find("script", attrs={"data-pv-meta": True}).string
+        env2 = elements[0].find("script", attrs={"data-pv-meta": True}).string
+        assert env1 == env2
 
         # And the original password still decrypts it
         decrypted = unlock_html(encrypted2, "password1")
@@ -746,7 +814,7 @@ class TestComposableEncryption:
 
     def test_wrap_existing_pagevault_element(self):
         """Test wrapping an existing pagevault element for nested encryption."""
-        html = '<pagevault data-encrypted="xyz"></pagevault>'
+        html = "<pagevault data-pv-v4></pagevault>"
 
         result = mark_elements(html, ["pagevault"])
 
@@ -769,7 +837,7 @@ class TestComposableEncryption:
         encrypted2 = lock_html(wrapped2, "member-password")
 
         # Both sections should be encrypted
-        assert encrypted2.count("data-encrypted=") == 2
+        assert encrypted2.count("data-pv-v4") == 2
         assert "Admin content" not in encrypted2
         assert "Member content" not in encrypted2
 
@@ -975,12 +1043,10 @@ class TestMultiUserEncryptDecrypt:
 
 
 class TestSyncHtmlKeys:
-    """Tests for sync_html_keys function."""
+    """Tests for sync_html_keys function (v4 envelopes)."""
 
     def test_sync_adds_user(self):
         """Test encrypt with users, sync to add bob, verify bob can decrypt."""
-        from pagevault.crypto import decrypt as crypto_decrypt
-
         html = "<pagevault>Sync secret</pagevault>"
 
         # Encrypt with alice only
@@ -993,17 +1059,12 @@ class TestSyncHtmlKeys:
             new_users={"alice": "pw-a", "bob": "pw-b"},
         )
 
-        # Verify bob can decrypt the element's data-encrypted attribute
-        soup = BeautifulSoup(result, "html.parser")
-        elem = soup.find("pagevault")
-        encrypted_data = elem["data-encrypted"]
-        content, _meta = crypto_decrypt(encrypted_data, "pw-b", username="bob")
-        assert content == "Sync secret"
+        # Verify bob can decrypt
+        decrypted = unlock_html(result, "pw-b", username="bob")
+        assert "Sync secret" in decrypted
 
     def test_sync_removes_user(self):
         """Test sync to remove bob, verify bob cannot decrypt."""
-        from pagevault.crypto import decrypt as crypto_decrypt
-
         html = "<pagevault>Remove user secret</pagevault>"
 
         # Encrypt with alice and bob
@@ -1017,28 +1078,28 @@ class TestSyncHtmlKeys:
         )
 
         # Verify alice can still decrypt
-        soup = BeautifulSoup(result, "html.parser")
-        elem = soup.find("pagevault")
-        encrypted_data = elem["data-encrypted"]
-        content, _meta = crypto_decrypt(encrypted_data, "pw-a", username="alice")
-        assert content == "Remove user secret"
+        decrypted = unlock_html(result, "pw-a", username="alice")
+        assert "Remove user secret" in decrypted
 
         # Verify bob cannot decrypt
         with pytest.raises(PagevaultError):
-            crypto_decrypt(encrypted_data, "pw-b", username="bob")
+            unlock_html(result, "pw-b", username="bob")
 
     def test_sync_rekey(self):
-        """Test sync with rekey=True changes data-encrypted."""
-        from pagevault.crypto import decrypt as crypto_decrypt
+        """Test sync with rekey=True produces a new envelope for the same content."""
+        import json as _json
 
         html = "<pagevault>Rekey secret</pagevault>"
 
         # Encrypt with alice
         encrypted = lock_html(html, users={"alice": "pw-a"})
 
-        # Capture original data-encrypted value
+        # Capture original envelope
         soup_orig = BeautifulSoup(encrypted, "html.parser")
-        original_data = soup_orig.find("pagevault")["data-encrypted"]
+        orig_meta = soup_orig.find("pagevault").find(
+            "script", attrs={"data-pv-meta": True}
+        ).string
+        orig_env = _json.loads(orig_meta)
 
         # Sync with rekey
         result = sync_html_keys(
@@ -1048,14 +1109,18 @@ class TestSyncHtmlKeys:
             rekey=True,
         )
 
-        # Verify data-encrypted value changed (new CEK)
+        # Envelope should differ (new CEK/IVs) even if password is the same
         soup_new = BeautifulSoup(result, "html.parser")
-        new_data = soup_new.find("pagevault")["data-encrypted"]
-        assert new_data != original_data
+        new_meta = soup_new.find("pagevault").find(
+            "script", attrs={"data-pv-meta": True}
+        ).string
+        new_env = _json.loads(new_meta)
+        assert new_env["iv_base"] != orig_env["iv_base"]
+        assert new_env["meta_iv"] != orig_env["meta_iv"]
 
         # Verify alice can still decrypt
-        content, _meta = crypto_decrypt(new_data, "pw-a", username="alice")
-        assert content == "Rekey secret"
+        decrypted = unlock_html(result, "pw-a", username="alice")
+        assert "Rekey secret" in decrypted
 
     def test_sync_sets_data_mode(self):
         """Test sync to multi-user sets data-mode='user'."""
@@ -1091,32 +1156,61 @@ class TestAutoMetadata:
 
     def test_meta_auto_populated(self):
         """Test lock_html auto-populates meta with encrypted_at and version."""
-        from pagevault.crypto import decrypt as crypto_decrypt
+        import json as _json
+
+        from pagevault.crypto import decrypt_chunked
 
         html = "<pagevault>Meta test</pagevault>"
 
         result = lock_html(html, "password")
 
-        # Extract encrypted data and decrypt to inspect meta
+        # Extract envelope + chunks and decrypt to inspect meta
         soup = BeautifulSoup(result, "html.parser")
         elem = soup.find("pagevault")
-        encrypted_data = elem["data-encrypted"]
-        content, meta = crypto_decrypt(encrypted_data, "password")
+        envelope = _json.loads(
+            elem.find("script", attrs={"data-pv-meta": True}).string
+        )
+        chunks = [
+            c.string or ""
+            for c in sorted(
+                elem.find_all("script", attrs={"data-pv-chunk": True}),
+                key=lambda s: int(s["data-pv-chunk"]),
+            )
+        ]
+        content_bytes, meta = decrypt_chunked(envelope, chunks, "password")
 
-        assert content == "Meta test"
+        assert content_bytes.decode("utf-8") == "Meta test"
         assert meta is not None
         assert "encrypted_at" in meta
         assert "version" in meta
+        assert meta.get("kind") == "html_fragment"
 
     def test_content_hash_unaffected_by_meta(self):
         """Test content hash is computed on inner HTML, not on meta."""
+        import json as _json
+
+        from pagevault.crypto import decrypt_chunked
+
         html = "<pagevault>Hash test content</pagevault>"
         expected_hash = content_hash("Hash test content")
 
         result = lock_html(html, "password")
 
-        # The content hash should match the inner HTML hash, not be affected by meta
-        assert f'data-content-hash="{expected_hash}"' in result
+        # The content hash should match the inner HTML hash
+        soup = BeautifulSoup(result, "html.parser")
+        elem = soup.find("pagevault")
+        envelope = _json.loads(
+            elem.find("script", attrs={"data-pv-meta": True}).string
+        )
+        chunks = [
+            c.string or ""
+            for c in sorted(
+                elem.find_all("script", attrs={"data-pv-chunk": True}),
+                key=lambda s: int(s["data-pv-chunk"]),
+            )
+        ]
+        _, meta = decrypt_chunked(envelope, chunks, "password")
+        assert meta["content_hash"] == expected_hash
 
 
 class TestMultiUserUnlockError:
@@ -1166,7 +1260,7 @@ class TestBackwardCompat:
 
         result = encrypt_html(html, "password")
 
-        assert "data-encrypted=" in result
+        assert "data-pv-v4" in result
         assert "Backward compat test" not in result
 
     def test_decrypt_html_alias_works(self):

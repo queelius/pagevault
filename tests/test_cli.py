@@ -194,7 +194,7 @@ class TestLock:
         assert output_path.exists()
 
         content = output_path.read_text()
-        assert "data-encrypted=" in content
+        assert "data-pv-v4" in content
         assert "Secret content" not in content
         assert "Public Header" in content
 
@@ -537,7 +537,7 @@ class TestSelectorLock:
         assert "1 file(s) locked" in result.output
 
         content = (output_dir / "index.html").read_text()
-        assert "data-encrypted=" in content
+        assert "data-pv-v4" in content
         assert "Secret content here" not in content
         assert "Public Header" in content
 
@@ -571,7 +571,7 @@ class TestSelectorLock:
         assert "1 file(s) locked" in result.output
 
         content = (output_dir / "index.html").read_text()
-        assert "data-encrypted=" in content
+        assert "data-pv-v4" in content
         assert "Private section" not in content
 
     def test_multiple_selectors(
@@ -606,7 +606,7 @@ class TestSelectorLock:
         assert "1 file(s) locked" in result.output
 
         content = (output_dir / "index.html").read_text()
-        assert content.count("data-encrypted=") == 2
+        assert content.count("data-pv-v4") == 2
         assert "Secret content here" not in content
         assert "Private section" not in content
 
@@ -835,7 +835,7 @@ class TestSelectorLock:
 
         # Final file should have both sections locked
         content = (pass2_dir / "index.html").read_text()
-        assert content.count("data-encrypted=") == 2
+        assert content.count("data-pv-v4") == 2
         assert "Admin content" not in content
         assert "Member content" not in content
         assert 'data-title="Admin Area"' in content
@@ -892,7 +892,7 @@ defaults:
         assert "1 file(s) locked" in result.output
 
         content = (output_dir / "index.html").read_text()
-        assert "data-encrypted=" in content
+        assert "data-pv-v4" in content
         assert "Hello World" not in content
 
     def test_preserves_head_during_body_lock(self, runner, tmp_path, sample_config):
@@ -934,7 +934,7 @@ defaults:
         assert "<title>My Page</title>" in content
         assert 'href="styles.css"' in content
         assert "Body content to encrypt" not in content
-        assert "data-encrypted=" in content
+        assert "data-pv-v4" in content
 
     def test_body_lock_with_password_flag(self, runner, tmp_path, sample_config):
         """Test using -p flag with body locking works."""
@@ -968,7 +968,7 @@ defaults:
         assert "1 file(s) locked" in result.output
 
         content = (output_dir / "index.html").read_text()
-        assert "data-encrypted=" in content
+        assert "data-pv-v4" in content
         assert "Secret stuff" not in content
 
     def test_selector_overrides_body_wrap(self, runner, tmp_path, sample_config):
@@ -1009,7 +1009,7 @@ defaults:
         # Only the selected element is locked, public content remains
         assert "Public content" in content
         assert "Secret content" not in content
-        assert "data-encrypted=" in content
+        assert "data-pv-v4" in content
 
 
 class TestMark:
@@ -1220,7 +1220,7 @@ users:
 
         content = (output_dir / "index.html").read_text()
         assert 'data-mode="user"' in content
-        assert "data-encrypted=" in content
+        assert "data-pv-v4" in content
         assert "Secret for multiple users" not in content
 
     def test_unlock_with_username_flag(self, runner, tmp_path, sample_users_config):
@@ -2110,7 +2110,7 @@ salt: "0123456789abcdef0123456789abcdef"
         # Check output has data-mode="user" (multi-user format for single user)
         content = (output_dir / "index.html").read_text()
         assert 'data-mode="user"' in content
-        assert "data-encrypted=" in content
+        assert "data-pv-v4" in content
         assert "Secret for alice" not in content
 
     def test_lock_username_without_password_fails(
@@ -2487,7 +2487,9 @@ salt: "0123456789abcdef0123456789abcdef"
         assert "pbkdf2-sha256" in result.output
         assert "310,000" in result.output
         assert "Key blobs:" in result.output
-        assert "Content hash:" in result.output
+        # In v4, content_hash is inside the encrypted envelope metadata,
+        # not a DOM attribute — so it isn't visible without decryption.
+        assert "Chunks:" in result.output
 
     def test_info_multi_user(self, runner, tmp_path):
         """Test info shows multi-user mode."""
@@ -2546,7 +2548,7 @@ users:
         result = runner.invoke(main, ["info", str(out_path)])
 
         assert result.exit_code == 0
-        assert "v3 chunked" in result.output
+        assert "v4 chunked" in result.output
         assert "Chunks:" in result.output
         assert "Total size:" in result.output
 
@@ -3294,7 +3296,7 @@ class TestInfoV3:
 
         result = runner.invoke(main, ["info", str(out_path)])
         assert result.exit_code == 0
-        assert "v3 chunked" in result.output
+        assert "v4 chunked" in result.output
         assert "Chunks:" in result.output
         assert "Total size:" in result.output
         assert "Chunk size:" in result.output
@@ -3406,7 +3408,7 @@ class TestInfoV3:
 
         result = runner.invoke(main, ["info", str(out_path)])
         assert result.exit_code == 0
-        assert "v3 chunked" in result.output
+        assert "v4 chunked" in result.output
 
 
 class TestCheckV3:
