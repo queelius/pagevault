@@ -14,11 +14,7 @@ class PdfViewer(ViewerPlugin):
     priority = 0
 
     def js(self) -> str:
-        return """async function(container, blob, url, meta, toolbar) {
-    var iframe = document.createElement('iframe');
-    iframe.src = url;
-    container.appendChild(iframe);
-}"""
+        return self._load_js_asset("pdf.js")
 
     def css(self) -> str:
         return ""
