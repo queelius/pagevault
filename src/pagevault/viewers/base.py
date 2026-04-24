@@ -2,6 +2,7 @@
 
 import re
 from abc import ABC, abstractmethod
+from importlib.resources import files
 
 # Viewer names must be safe JS identifiers: lowercase alpha start, then
 # lowercase alphanumeric or underscore. This prevents injection when the
@@ -120,3 +121,13 @@ class ViewerPlugin(ABC):
         included as a separate <script> block before the renderer.
         """
         return []
+
+    @classmethod
+    def _load_js_asset(cls, filename: str) -> str:
+        """Load a JS asset from src/pagevault/js/viewers/<filename>."""
+        return (files("pagevault.js") / "viewers" / filename).read_text(encoding="utf-8")
+
+    @classmethod
+    def _load_css_asset(cls, filename: str) -> str:
+        """Load a CSS asset from src/pagevault/js/viewers/<filename>."""
+        return (files("pagevault.js") / "viewers" / filename).read_text(encoding="utf-8")
