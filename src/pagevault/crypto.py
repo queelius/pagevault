@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # Cryptographic parameters (must match browser-side implementation)
-VERSION_V3 = 4  # Envelope version for the chunked (v4) format. Name kept pre-rename.
+VERSION = 4  # Envelope version for the v4 (chunked) format.
 ALGORITHM = "aes-256-gcm"
 KDF = "pbkdf2-sha256"
 ITERATIONS = 310000
@@ -263,7 +263,7 @@ def content_hash_bytes(data: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
-# v3 chunked encryption
+# v4 chunked encryption
 # ---------------------------------------------------------------------------
 
 
@@ -299,7 +299,7 @@ def encrypt_v4(
     meta: dict | None = None,
     chunk_size: int = CHUNK_SIZE,
 ) -> tuple[dict, list[str]]:
-    """Encrypt raw bytes using v3 chunked format.
+    """Encrypt raw bytes using the v4 chunked format.
 
     Data is split into fixed-size chunks, each encrypted with AES-256-GCM
     using a counter-derived IV.  Metadata is encrypted separately.  The
@@ -363,7 +363,7 @@ def encrypt_v4(
         raise PagevaultError("Too many chunks: exceeds 2^32 IV counter space")
 
     envelope = {
-        "v": VERSION_V3,
+        "v": VERSION,
         "alg": ALGORITHM,
         "kdf": KDF,
         "iter": ITERATIONS,
@@ -386,13 +386,13 @@ def decrypt_v4(
     password: str,
     username: str | None = None,
 ) -> tuple[bytes, dict]:
-    """Decrypt v3 chunked payload.
+    """Decrypt a v4 chunked payload.
 
     Recovers the CEK via key unwrapping, decrypts metadata, then decrypts
     each chunk using counter-derived IVs and concatenates the results.
 
     Args:
-        envelope: The v3 envelope dict from encrypt_v4().
+        envelope: The v4 envelope dict from encrypt_v4().
         chunks: List of base64-encoded chunk ciphertexts.
         password: The password used for encryption.
         username: Optional username for multi-user content.
@@ -403,8 +403,8 @@ def decrypt_v4(
     Raises:
         PagevaultError: If decryption fails.
     """
-    if envelope.get("v") != VERSION_V3:
-        raise PagevaultError(f"Expected v3, got v{envelope.get('v')}")
+    if envelope.get("v") != VERSION:
+        raise PagevaultError(f"Expected v4, got v{envelope.get('v')}")
 
     try:
         salt = bytes.fromhex(envelope["salt"])
@@ -458,8 +458,8 @@ def decrypt_v4(
     return result, meta
 
 
-def inspect_payload_v3(envelope: dict) -> dict[str, Any]:
-    """Inspect a v3 chunked envelope dict without decrypting.
+def inspect_payload_v4(envelope: dict) -> dict[str, Any]:
+    """Inspect a v4 envelope dict without decrypting.
 
     Args:
         envelope: The parsed JSON from a pv-meta script tag.
@@ -480,12 +480,12 @@ def inspect_payload_v3(envelope: dict) -> dict[str, Any]:
     }
 
 
-def verify_password_v3(
+def verify_password_v4(
     envelope: dict,
     password: str,
     username: str | None = None,
 ) -> bool:
-    """Verify password against a v3 envelope (key unwrap only, fast).
+    """Verify password against a v4 envelope (key unwrap only, fast).
 
     Args:
         envelope: The parsed JSON from a pv-meta script tag.
@@ -496,10 +496,10 @@ def verify_password_v3(
         True if password successfully unwraps at least one key blob.
 
     Raises:
-        PagevaultError: If envelope is not v3 or has invalid salt.
+        PagevaultError: If envelope is not v4 or has invalid salt.
     """
-    if envelope.get("v") != VERSION_V3:
-        raise PagevaultError(f"Expected v3, got v{envelope.get('v')}")
+    if envelope.get("v") != VERSION:
+        raise PagevaultError(f"Expected v4, got v{envelope.get('v')}")
 
     try:
         salt = bytes.fromhex(envelope["salt"])

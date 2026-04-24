@@ -2538,8 +2538,8 @@ users:
         assert "no pagevault elements" in result.output.lower()
 
     def test_info_wrap_file(self, runner, tmp_path):
-        """Test info on wrapped file shows v3 chunked format."""
-        # Create a text file and wrap it (now uses v3 chunked format)
+        """Test info on wrapped file shows v4 chunked format."""
+        # Create a text file and wrap it (now uses v4 chunked format)
         txt_path = tmp_path / "data.txt"
         txt_path.write_text("test content")
 
@@ -3286,11 +3286,11 @@ class TestWrapFlag:
         assert (out_dir / "notes.txt.html").exists()
 
 
-class TestInfoV3:
-    """Tests for info command on v3 wrapped files."""
+class TestInfoV4:
+    """Tests for info command on v4 wrapped files."""
 
     def test_info_v3_shows_chunk_info(self, runner, tmp_path):
-        """Info on v3 file shows chunk count and total size."""
+        """Info on v4 file shows chunk count and total size."""
         txt_path = tmp_path / "test.txt"
         txt_path.write_text("Hello!")
         out_path = tmp_path / "test.html"
@@ -3309,7 +3309,7 @@ class TestInfoV3:
         assert "Key blobs:" in result.output
 
     def test_info_v3_shows_algorithm(self, runner, tmp_path):
-        """Info on v3 file shows algorithm and KDF."""
+        """Info on v4 file shows algorithm and KDF."""
         txt_path = tmp_path / "test.txt"
         txt_path.write_text("Hello!")
         out_path = tmp_path / "test.html"
@@ -3323,7 +3323,7 @@ class TestInfoV3:
         assert "310,000" in result.output
 
     def test_info_v3_shows_content_hash(self, runner, tmp_path):
-        """Info on v3 file shows content hash if present."""
+        """Info on v4 file shows content hash if present."""
         txt_path = tmp_path / "test.txt"
         txt_path.write_text("Hello!")
         out_path = tmp_path / "test.html"
@@ -3335,7 +3335,7 @@ class TestInfoV3:
         assert "Content hash:" in result.output
 
     def test_info_v3_shows_runtime(self, runner, tmp_path):
-        """Info on v3 file shows runtime scripts and styles."""
+        """Info on v4 file shows runtime scripts and styles."""
         txt_path = tmp_path / "test.txt"
         txt_path.write_text("Hello!")
         out_path = tmp_path / "test.html"
@@ -3349,7 +3349,7 @@ class TestInfoV3:
         assert "pagevault:" in result.output
 
     def test_info_v3_shows_version(self, runner, tmp_path):
-        """Info on v3 file shows version number."""
+        """Info on v4 file shows version number."""
         txt_path = tmp_path / "test.txt"
         txt_path.write_text("Hello!")
         out_path = tmp_path / "test.html"
@@ -3361,7 +3361,7 @@ class TestInfoV3:
         assert "Version:        v4" in result.output
 
     def test_info_v3_chunk_tags(self, runner, tmp_path):
-        """Info on v3 file counts chunk script tags."""
+        """Info on v4 file counts chunk script tags."""
         txt_path = tmp_path / "test.txt"
         txt_path.write_text("Hello!")
         out_path = tmp_path / "test.html"
@@ -3373,7 +3373,7 @@ class TestInfoV3:
         assert "Chunk tags:" in result.output
 
     def test_info_v3_chunk_count_multichunk(self, runner, tmp_path):
-        """Info on a multi-chunk v3 file reports the right count in one
+        """Info on a multi-chunk v4 file reports the right count in one
         DOM pass (regression: was O(N²) via while soup.find)."""
         # 3 MB file with default 1 MB chunk size → 3 chunks
         big_path = tmp_path / "big.bin"
@@ -3390,7 +3390,7 @@ class TestInfoV3:
         assert "WARNING" not in result.output
 
     def test_info_v3_site_mode(self, runner, tmp_path):
-        """Info on v3 site shows site-related info."""
+        """Info on v4 site shows site-related info."""
         site_dir = tmp_path / "site"
         site_dir.mkdir()
         (site_dir / "index.html").write_text("<h1>Home</h1>")
@@ -3418,10 +3418,10 @@ class TestInfoV3:
 
 
 class TestCheckV3:
-    """Tests for check command on v3 wrapped files."""
+    """Tests for check command on v4 wrapped files."""
 
     def test_check_v3_correct_password(self, runner, tmp_path):
-        """Check command works on v3 files with correct password."""
+        """Check command works on v4 files with correct password."""
         txt_path = tmp_path / "test.txt"
         txt_path.write_text("Secret")
         out_path = tmp_path / "test.html"
@@ -3433,7 +3433,7 @@ class TestCheckV3:
         assert result.exit_code == 0
 
     def test_check_v3_wrong_password(self, runner, tmp_path):
-        """Check command detects wrong password on v3 files."""
+        """Check command detects wrong password on v4 files."""
         txt_path = tmp_path / "test.txt"
         txt_path.write_text("Secret")
         out_path = tmp_path / "test.html"
@@ -3453,7 +3453,7 @@ class TestCheckV3:
         assert result.exit_code != 0
 
     def test_check_v3_site(self, runner, tmp_path):
-        """Check command works on v3 site files."""
+        """Check command works on v4 site files."""
         site_dir = tmp_path / "site"
         site_dir.mkdir()
         (site_dir / "index.html").write_text("<h1>Home</h1>")

@@ -7,7 +7,7 @@ import pytest
 from pagevault.crypto import (
     CHUNK_SIZE,
     SALT_LENGTH,
-    VERSION_V3,
+    VERSION,
     PagevaultError,
     _derive_chunk_iv,
     _unwrap_key,
@@ -18,10 +18,10 @@ from pagevault.crypto import (
     encrypt_v4,
     generate_salt,
     hex_to_salt,
-    inspect_payload_v3,
+    inspect_payload_v4,
     pad_content,
     salt_to_hex,
-    verify_password_v3,
+    verify_password_v4,
 )
 
 
@@ -310,8 +310,8 @@ class TestPadContent:
 
 
 # NOTE: inspect_payload() and verify_password() were v2-only APIs and
-# are removed in v0.4.0. Use inspect_payload_v3() / verify_password_v3()
-# against a v4 envelope dict (TestInspectPayloadV3 / TestVerifyPasswordV3).
+# are removed in v0.4.0. Use inspect_payload_v4() / verify_password_v4()
+# against a v4 envelope dict (TestInspectPayloadV4 / TestVerifyPasswordV4).
 
 
 class TestChunkIvDerivation:
@@ -339,7 +339,7 @@ class TestChunkIvDerivation:
 
 
 class TestChunkedEncryption:
-    """Tests for v3 chunked encrypt/decrypt."""
+    """Tests for v4 chunked encrypt/decrypt."""
 
     def test_basic_roundtrip(self):
         """Encrypt bytes then decrypt, verify roundtrip."""
@@ -387,10 +387,10 @@ class TestChunkedEncryption:
         assert result_data == b""
 
     def test_envelope_fields(self):
-        """Envelope dict contains all required v3 fields."""
+        """Envelope dict contains all required v4 fields."""
         data = b"test"
         envelope, _ = encrypt_v4(data, password="pw")
-        assert envelope["v"] == VERSION_V3
+        assert envelope["v"] == VERSION
         assert envelope["alg"] == "aes-256-gcm"
         assert envelope["kdf"] == "pbkdf2-sha256"
         assert envelope["iter"] == 310000
@@ -509,13 +509,13 @@ class TestContentHashBytes:
         assert content_hash(text) == content_hash_bytes(text.encode("utf-8"))
 
 
-class TestInspectPayloadV3:
-    """Tests for inspect_payload_v3 with v3 chunked payloads."""
+class TestInspectPayloadV4:
+    """Tests for inspect_payload_v4 with v4 chunked payloads."""
 
-    def test_inspect_v3(self):
+    def test_inspect_v4(self):
         data = b"x" * 100
         envelope, _ = encrypt_v4(data, password="pw")
-        info = inspect_payload_v3(envelope)
+        info = inspect_payload_v4(envelope)
         assert info["version"] == 4
         assert info["algorithm"] == "aes-256-gcm"
         assert info["chunk_count"] == 1
@@ -523,27 +523,27 @@ class TestInspectPayloadV3:
         assert info["total_size"] == 100
         assert info["key_count"] == 1
 
-    def test_inspect_v3_multiuser(self):
+    def test_inspect_v4_multiuser(self):
         data = b"test"
         users = {"alice": "pw-a", "bob": "pw-b"}
         envelope, _ = encrypt_v4(data, users=users)
-        info = inspect_payload_v3(envelope)
+        info = inspect_payload_v4(envelope)
         assert info["key_count"] == 2
 
 
-class TestVerifyPasswordV3:
-    """Tests for verify_password_v3 with chunked payloads."""
+class TestVerifyPasswordV4:
+    """Tests for verify_password_v4 with chunked payloads."""
 
     def test_correct_password(self):
         envelope, _ = encrypt_v4(b"secret", password="correct")
-        assert verify_password_v3(envelope, "correct") is True
+        assert verify_password_v4(envelope, "correct") is True
 
     def test_wrong_password(self):
         envelope, _ = encrypt_v4(b"secret", password="correct")
-        assert verify_password_v3(envelope, "wrong") is False
+        assert verify_password_v4(envelope, "wrong") is False
 
     def test_multiuser(self):
         envelope, _ = encrypt_v4(b"shared", users={"alice": "pw-a", "bob": "pw-b"})
-        assert verify_password_v3(envelope, "pw-a", username="alice") is True
-        assert verify_password_v3(envelope, "pw-b", username="bob") is True
-        assert verify_password_v3(envelope, "pw-a", username="bob") is False
+        assert verify_password_v4(envelope, "pw-a", username="alice") is True
+        assert verify_password_v4(envelope, "pw-b", username="bob") is True
+        assert verify_password_v4(envelope, "pw-a", username="bob") is False

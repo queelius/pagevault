@@ -11,9 +11,9 @@ from pagevault.config import CONFIG_FILENAME
 from pagevault.crypto import PagevaultError
 from pagevault.viewers import discover_viewers
 from pagevault.wrap import (
-    _generate_wrap_html_v3,
+    _generate_wrap_html_v4,
     _get_progress_css,
-    _get_renderer_js_v3,
+    _get_renderer_js_v4,
     _get_site_renderer_js,
     _get_wrap_css,
     detect_mime,
@@ -60,7 +60,7 @@ class TestWrapFile:
     """Tests for wrap_file function."""
 
     def test_basic_wrap(self, tmp_path):
-        """Test wrapping a simple text file produces v3 output."""
+        """Test wrapping a simple text file produces v4 output."""
         # Create test file
         test_file = tmp_path / "test.txt"
         test_file.write_text("Hello, World!")
@@ -72,7 +72,7 @@ class TestWrapFile:
 
         content = output.read_text()
         soup = BeautifulSoup(content, "html.parser")
-        # v3: envelope in pv-meta, not data-encrypted attribute
+        # v4: envelope in pv-meta, not data-encrypted attribute
         assert soup.find("script", {"id": "pv-meta"}) is not None
         pv = soup.find("pagevault")
         assert pv.get("data-pv-chunked") == "true"
@@ -119,7 +119,7 @@ class TestWrapFile:
         assert soup.find("pagevault").get("data-pv-chunked") == "true"
 
     def test_encrypted_payload_is_decryptable(self, tmp_path):
-        """Test that the v3 encrypted payload can be decrypted."""
+        """Test that the v4 encrypted payload can be decrypted."""
         import json
 
         from pagevault.crypto import decrypt_v4
@@ -130,7 +130,7 @@ class TestWrapFile:
         output = wrap_file(test_file, password="test-pw")
         content = output.read_text()
 
-        # Extract v3 envelope and chunks
+        # Extract v4 envelope and chunks
         soup = BeautifulSoup(content, "html.parser")
         envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
         chunks = []
@@ -145,7 +145,7 @@ class TestWrapFile:
         # Decrypt
         data, meta = decrypt_v4(envelope, chunks, "test-pw")
 
-        # The data should be the raw file bytes (no base64 layer in v3)
+        # The data should be the raw file bytes (no base64 layer in v4)
         assert data == b"Secret data!"
 
         # Meta should have file info
@@ -160,7 +160,7 @@ class TestWrapFile:
             wrap_file(tmp_path / "nonexistent.txt", password="pw")
 
     def test_wrap_with_content_hash(self, tmp_path):
-        """Test that content hash is included in v3 envelope."""
+        """Test that content hash is included in v4 envelope."""
         import json
 
         test_file = tmp_path / "test.txt"
@@ -191,7 +191,7 @@ class TestWrapFile:
         content = output.read_text()
         assert 'data-mode="user"' in content
 
-        # Extract v3 envelope and chunks
+        # Extract v4 envelope and chunks
         soup = BeautifulSoup(content, "html.parser")
         envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
         chunks = []
@@ -241,7 +241,7 @@ class TestWrapFile:
         output = wrap_file(test_file, password="pw")
         assert output.exists()
 
-        # Verify decryptability via v3 chunked
+        # Verify decryptability via v4 chunked
         soup = BeautifulSoup(output.read_text(), "html.parser")
         envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
         chunks = []
@@ -288,7 +288,7 @@ class TestWrapSite:
 
         content = output.read_text()
         soup = BeautifulSoup(content, "html.parser")
-        # v3: envelope in pv-meta, not data-encrypted
+        # v4: envelope in pv-meta, not data-encrypted
         assert soup.find("script", {"id": "pv-meta"}) is not None
         pv = soup.find("pagevault")
         assert pv.get("data-pv-chunked") == "true"
@@ -349,7 +349,7 @@ class TestWrapSite:
 
         output = wrap_site(site_dir, password="pw")
 
-        # Extract and decrypt via v3
+        # Extract and decrypt via v4
         soup = BeautifulSoup(output.read_text(), "html.parser")
         envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
         chunks = []
@@ -369,7 +369,7 @@ class TestWrapSite:
         assert "index.html" in meta["files"]
         assert "style.css" in meta["files"]
 
-        # Data should be raw zip bytes (no base64 layer in v3)
+        # Data should be raw zip bytes (no base64 layer in v4)
         with zipfile.ZipFile(BytesIO(data)) as zf:
             names = zf.namelist()
             assert "index.html" in names
@@ -395,7 +395,7 @@ class TestWrapSite:
 
         output = wrap_site(site_dir, password="pw")
 
-        # Verify all files in metadata via v3
+        # Verify all files in metadata via v4
         soup = BeautifulSoup(output.read_text(), "html.parser")
         envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
         chunks = []
@@ -466,7 +466,7 @@ class TestWrapSite:
         content = output.read_text()
         assert 'data-mode="user"' in content
 
-        # Both users can decrypt via v3
+        # Both users can decrypt via v4
         soup = BeautifulSoup(content, "html.parser")
         envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
         chunks = []
@@ -643,7 +643,7 @@ salt: "0123456789abcdef0123456789abcdef"
         assert result.exit_code == 0
         assert output.exists()
 
-        # v3: entry is in encrypted metadata, verify via decrypt
+        # v4: entry is in encrypted metadata, verify via decrypt
         content = output.read_text()
         soup = BeautifulSoup(content, "html.parser")
         envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
@@ -733,7 +733,7 @@ class TestMarkdownToggle:
     def test_toggle_button_in_renderer(self):
         """Renderer JS should contain toggle button code via MarkdownViewer plugin."""
         viewers = discover_viewers()
-        js = _get_renderer_js_v3(viewers)
+        js = _get_renderer_js_v4(viewers)
         assert "toolbar-toggle" in js
         assert "Source" in js
         assert "Rendered" in js
@@ -741,7 +741,7 @@ class TestMarkdownToggle:
     def test_simplemarkdown_fallback_preserved(self):
         """simpleMarkdown fallback should still exist in renderer via MarkdownViewer."""
         viewers = discover_viewers()
-        js = _get_renderer_js_v3(viewers)
+        js = _get_renderer_js_v4(viewers)
         assert "simpleMarkdown" in js
 
 
@@ -751,7 +751,7 @@ class TestViewerToolbar:
     def test_create_toolbar_in_renderer(self):
         """Renderer JS should contain createToolbar function."""
         viewers = discover_viewers()
-        js = _get_renderer_js_v3(viewers)
+        js = _get_renderer_js_v4(viewers)
         assert "createToolbar" in js
         assert "toolbar-filename" in js
         assert "toolbar-size" in js
@@ -786,14 +786,14 @@ class TestImageViewer:
     def test_image_viewer_in_dispatch_table(self):
         """Renderer JS should include image viewer in dispatch table."""
         viewers = discover_viewers()
-        js = _get_renderer_js_v3(viewers)
+        js = _get_renderer_js_v4(viewers)
         assert "__pv_image" in js
         assert "'image/*'" in js
 
     def test_zoom_class_in_renderer(self):
         """Renderer JS should toggle 'zoomed' class (ImageViewer plugin)."""
         viewers = discover_viewers()
-        js = _get_renderer_js_v3(viewers)
+        js = _get_renderer_js_v4(viewers)
         assert "zoomed" in js
 
     def test_image_zoom_css(self):
@@ -813,7 +813,7 @@ class TestTextViewer:
     def test_text_viewer_in_dispatch_table(self):
         """Renderer JS should include text viewer in dispatch table."""
         viewers = discover_viewers()
-        js = _get_renderer_js_v3(viewers)
+        js = _get_renderer_js_v4(viewers)
         assert "__pv_text" in js
         assert "'text/*'" in js
 
@@ -958,7 +958,7 @@ class TestSiteResourceStringRewriting:
         output = wrap_site(site_dir, password="pw")
         assert output.exists()
 
-        # Verify all files are in the encrypted payload via v3
+        # Verify all files are in the encrypted payload via v4
         soup = BeautifulSoup(output.read_text(), "html.parser")
         envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
         chunks = []
@@ -979,7 +979,7 @@ class TestSiteResourceStringRewriting:
 
 
 class TestWrapFileV3:
-    """Tests for wrap_file using v3 chunked format."""
+    """Tests for wrap_file using v4 chunked format."""
 
     def test_basic_wrap_produces_chunk_tags(self, tmp_path):
         """wrap_file output has per-chunk script tags, not data-encrypted."""
@@ -1055,7 +1055,7 @@ class TestWrapFileV3:
         assert meta["mime"] == "image/png"
 
     def test_content_hash_present(self, tmp_path):
-        """v3 envelope includes content_hash."""
+        """v4 envelope includes content_hash."""
         import json
 
         test_file = tmp_path / "test.txt"
@@ -1078,7 +1078,7 @@ class TestWrapFileV3:
 
 
 class TestWrapSiteV3:
-    """Tests for wrap_site using v3 chunked format."""
+    """Tests for wrap_site using v4 chunked format."""
 
     def test_site_produces_chunk_tags(self, tmp_path):
         site_dir = tmp_path / "site"
@@ -1139,8 +1139,8 @@ class TestWrapSiteV3:
         content = output.read_text()
         assert "ZipReader" in content or "JSZip" in content
 
-    def test_site_v3_content_hash_in_envelope(self, tmp_path):
-        """Content hash should be in the v3 envelope, not a data attribute."""
+    def test_site_v4_content_hash_in_envelope(self, tmp_path):
+        """Content hash should be in the v4 envelope, not a data attribute."""
         import json
 
         site_dir = tmp_path / "site"
@@ -1153,7 +1153,7 @@ class TestWrapSiteV3:
         assert "content_hash" in envelope
         assert len(envelope["content_hash"]) == 32
 
-    def test_site_v3_multiuser_roundtrip(self, tmp_path):
+    def test_site_v4_multiuser_roundtrip(self, tmp_path):
         """Multi-user site wrap should decrypt for each user."""
         import json
 
@@ -1187,8 +1187,8 @@ class TestWrapSiteV3:
         assert meta_a["type"] == "site"
         assert meta_b["type"] == "site"
 
-    def test_site_v3_with_subdirectories(self, tmp_path):
-        """Subdirectories should be preserved in v3 zip payload."""
+    def test_site_v4_with_subdirectories(self, tmp_path):
+        """Subdirectories should be preserved in v4 zip payload."""
         import json
 
         from pagevault.crypto import decrypt_v4
@@ -1221,15 +1221,15 @@ class TestRendererXssPrevention:
     """Tests for XSS prevention in renderer JS functions."""
 
     def test_file_renderer_escapes_filename(self):
-        """Test _get_renderer_js_v3() uses escapeHtml for filename display."""
+        """Test _get_renderer_js_v4() uses escapeHtml for filename display."""
         viewers = discover_viewers()
-        js = _get_renderer_js_v3(viewers)
+        js = _get_renderer_js_v4(viewers)
         assert "escapeHtml(fname)" in js
 
     def test_file_renderer_has_escapehtml(self):
         """Test _get_renderer_js() defines escapeHtml."""
         viewers = discover_viewers()
-        js = _get_renderer_js_v3(viewers)
+        js = _get_renderer_js_v4(viewers)
         assert "function escapeHtml" in js
 
     def test_site_renderer_escapes_entry(self):
@@ -1248,12 +1248,12 @@ class TestRendererXssPrevention:
         assert "function escapeHtml" in js
 
 
-class TestGenerateWrapHtmlV3:
-    """Tests for v3 chunked HTML template generation."""
+class TestGenerateWrapHtmlV4:
+    """Tests for v4 chunked HTML template generation."""
 
     def test_has_pv_meta_script(self):
         """Output HTML contains a pv-meta script tag with JSON envelope."""
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 1, "keys": []},
             chunks=["AAAA"],
             title="Protected: test.txt",
@@ -1269,7 +1269,7 @@ class TestGenerateWrapHtmlV3:
         import json
 
         envelope = {"v": 3, "chunk_count": 2, "keys": [{"iv": "abc", "ct": "def"}]}
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope=envelope,
             chunks=["chunk0", "chunk1"],
             title="Protected: test",
@@ -1282,7 +1282,7 @@ class TestGenerateWrapHtmlV3:
 
     def test_has_chunk_script_tags(self):
         """Each chunk gets its own script element with id pv-N."""
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 3, "keys": []},
             chunks=["chunk0", "chunk1", "chunk2"],
             title="Protected: file",
@@ -1297,7 +1297,7 @@ class TestGenerateWrapHtmlV3:
 
     def test_has_pagevault_element(self):
         """Output has a <pagevault> element for the password prompt."""
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 0, "keys": []},
             chunks=[],
             title="Protected: test",
@@ -1310,19 +1310,19 @@ class TestGenerateWrapHtmlV3:
 
     def test_has_runtime_scripts(self):
         """Output includes crypto and renderer runtime scripts."""
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 1, "keys": []},
             chunks=["AAAA"],
             title="Protected: test.txt",
             viewers=[],
         )
-        assert "decryptV3Chunked" in html
+        assert "decryptV4Chunked" in html
         assert "crypto.subtle" in html
         assert "PBKDF2" in html
 
     def test_has_progress_bar(self):
         """Output includes progress bar CSS and JS."""
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 1, "keys": []},
             chunks=["AAAA"],
             title="Protected: test",
@@ -1332,7 +1332,7 @@ class TestGenerateWrapHtmlV3:
 
     def test_title_escaped(self):
         """Title with HTML special chars is escaped."""
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 0, "keys": []},
             chunks=[],
             title='Protected: <script>alert("xss")</script>',
@@ -1342,8 +1342,8 @@ class TestGenerateWrapHtmlV3:
         assert "&lt;script&gt;" in html
 
     def test_no_data_encrypted_attribute(self):
-        """v3 does NOT use data-encrypted attribute (chunks are in script tags)."""
-        html = _generate_wrap_html_v3(
+        """v4 does NOT use data-encrypted attribute (chunks are in script tags)."""
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 1, "keys": []},
             chunks=["AAAA"],
             title="Protected: test",
@@ -1353,7 +1353,7 @@ class TestGenerateWrapHtmlV3:
 
     def test_zero_chunks(self):
         """Template with zero chunks should still have pv-meta and pagevault element."""
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 0, "keys": []},
             chunks=[],
             title="Protected: empty",
@@ -1367,7 +1367,7 @@ class TestGenerateWrapHtmlV3:
 
     def test_user_mode_attribute(self):
         """When users dict is provided, pagevault element has data-mode='user'."""
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 0, "keys": []},
             chunks=[],
             title="Protected: test",
@@ -1380,7 +1380,7 @@ class TestGenerateWrapHtmlV3:
 
     def test_includes_framework_css(self):
         """Output includes framework CSS (pagevault-container, etc)."""
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 0, "keys": []},
             chunks=[],
             title="Protected: test",
@@ -1391,7 +1391,7 @@ class TestGenerateWrapHtmlV3:
 
     def test_site_mode_includes_jszip(self):
         """When include_jszip is True, output includes JSZip shim and site renderer."""
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 1, "keys": []},
             chunks=["AAAA"],
             title="Protected: site",
@@ -1402,8 +1402,8 @@ class TestGenerateWrapHtmlV3:
         assert "__pagevault_renderSite" in html
 
     def test_renderer_has_escapehtml(self):
-        """The v3 renderer IIFE must define its own escapeHtml."""
-        html = _generate_wrap_html_v3(
+        """The v4 renderer IIFE must define its own escapeHtml."""
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 0, "keys": []},
             chunks=[],
             title="Protected: test",
@@ -1411,9 +1411,9 @@ class TestGenerateWrapHtmlV3:
         )
         assert "function escapeHtml" in html
 
-    def test_crypto_js_v3_hex_to_bytes(self):
-        """The v3 crypto JS must use hexToBytes (v3 salt is hex, not base64)."""
-        html = _generate_wrap_html_v3(
+    def test_crypto_js_v4_hex_to_bytes(self):
+        """The v4 crypto JS must use hexToBytes (v4 salt is hex, not base64)."""
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 0, "keys": []},
             chunks=[],
             title="Protected: test",
@@ -1421,9 +1421,9 @@ class TestGenerateWrapHtmlV3:
         )
         assert "hexToBytes" in html
 
-    def test_crypto_js_v3_derive_chunk_iv(self):
-        """The v3 crypto JS must use deriveChunkIv for per-chunk IVs."""
-        html = _generate_wrap_html_v3(
+    def test_crypto_js_v4_derive_chunk_iv(self):
+        """The v4 crypto JS must use deriveChunkIv for per-chunk IVs."""
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 0, "keys": []},
             chunks=[],
             title="Protected: test",
@@ -1432,9 +1432,9 @@ class TestGenerateWrapHtmlV3:
         assert "deriveChunkIv" in html
 
     def test_viewer_dispatch_table(self):
-        """v3 renderer includes viewer dispatch table when viewers given."""
+        """v4 renderer includes viewer dispatch table when viewers given."""
         viewers = discover_viewers()
-        html = _generate_wrap_html_v3(
+        html = _generate_wrap_html_v4(
             envelope={"v": 3, "chunk_count": 1, "keys": []},
             chunks=["AAAA"],
             title="Protected: test.png",
@@ -1446,19 +1446,19 @@ class TestGenerateWrapHtmlV3:
 
 
 class TestV3PaddingStrip:
-    """Tests for v3 renderer stripping null-byte padding."""
+    """Tests for v4 renderer stripping null-byte padding."""
 
-    def test_v3_renderer_truncates_blob_to_meta_size(self):
-        """v3 renderer JS should truncate blob using meta.size after decryption."""
-        from pagevault.wrap import _get_renderer_js_v3
-        js = _get_renderer_js_v3([])
+    def test_v4_renderer_truncates_blob_to_meta_size(self):
+        """v4 renderer JS should truncate blob using meta.size after decryption."""
+        from pagevault.wrap import _get_renderer_js_v4
+        js = _get_renderer_js_v4([])
         assert "meta.size" in js
         assert ".slice(" in js or "slice(0" in js
 
-    def test_v3_renderer_has_padding_comment(self):
-        """v3 renderer should document the padding strip."""
-        from pagevault.wrap import _get_renderer_js_v3
-        js = _get_renderer_js_v3([])
+    def test_v4_renderer_has_padding_comment(self):
+        """v4 renderer should document the padding strip."""
+        from pagevault.wrap import _get_renderer_js_v4
+        js = _get_renderer_js_v4([])
         assert "padding" in js.lower() or "pad" in js.lower()
 
 

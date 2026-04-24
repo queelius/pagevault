@@ -60,7 +60,7 @@ def _encrypt_payload(
     config: PagevaultConfig | None,
     pad: bool,
 ) -> tuple[dict, list[str]]:
-    """Hash, optionally pad, then v3-chunk-encrypt raw bytes.
+    """Hash, optionally pad, then v4-chunk-encrypt raw bytes.
 
     Returns the envelope (with ``content_hash`` added) and the list of
     base64-encoded chunk ciphertexts. Shared by :func:`wrap_file` and
@@ -140,7 +140,7 @@ def wrap_file(
     matching_viewer = resolve_viewer(mime, viewers)
     viewer_deps = matching_viewer.dependencies() if matching_viewer else []
 
-    html = _generate_wrap_html_v3(
+    html = _generate_wrap_html_v4(
         envelope=envelope,
         chunks=chunks,
         title=f"Protected: {file_path.name}",
@@ -222,7 +222,7 @@ def wrap_site(
     # viewers are not needed — the site's own HTML/CSS/JS runs inside the
     # sandboxed iframe. Passing viewers=[] produces an empty dispatch table,
     # which is intentional: renderFile is only reached for non-site payloads.
-    html = _generate_wrap_html_v3(
+    html = _generate_wrap_html_v4(
         envelope=envelope,
         chunks=chunks,
         title=f"Protected: {dir_path.name}",
@@ -475,7 +475,7 @@ def _build_viewer_dispatch(viewers: list) -> tuple[str, str]:
 
 
 def _get_progress_css() -> str:
-    """Generate CSS for the v3 chunk-decryption progress bar."""
+    """Generate CSS for the v4 chunk-decryption progress bar."""
     return """
 /* pagevault progress bar */
 .pagevault-progress {
@@ -506,7 +506,7 @@ def _get_progress_css() -> str:
 """
 
 
-def _generate_wrap_html_v3(  # noqa: E501
+def _generate_wrap_html_v4(  # noqa: E501
     envelope: dict,
     chunks: list[str],
     title: str,
@@ -517,9 +517,9 @@ def _generate_wrap_html_v3(  # noqa: E501
     include_jszip: bool = False,
     entry: str | None = None,
 ) -> str:
-    """Generate self-contained HTML with v3 chunked encrypted payload.
+    """Generate self-contained HTML with v4 chunked encrypted payload.
 
-    Instead of a single ``data-encrypted`` attribute, v3 stores the
+    Instead of a single ``data-encrypted`` attribute, v4 stores the
     envelope as JSON in a ``<script id="pv-meta">`` tag and each
     encrypted chunk in its own ``<script id="pv-N" type="x-pv">`` tag.
     This avoids the HTML attribute size limit for large payloads and
@@ -569,8 +569,8 @@ def _generate_wrap_html_v3(  # noqa: E501
     progress_css = _get_progress_css()
     css = framework_css + viewer_css + progress_css
 
-    crypto_js = _get_crypto_js_v3()
-    renderer_js = _get_renderer_js_v3(viewers or [])
+    crypto_js = _get_crypto_js_v4()
+    renderer_js = _get_renderer_js_v4(viewers or [])
 
     jszip_block = ""
     site_js = ""
@@ -608,8 +608,8 @@ def _generate_wrap_html_v3(  # noqa: E501
 </html>"""
 
 
-def _get_crypto_js_v3() -> str:  # noqa: E501
-    """Generate the v3 chunked crypto JS for wrap payloads.
+def _get_crypto_js_v4() -> str:  # noqa: E501
+    """Generate the v4 chunked crypto JS for wrap payloads.
 
     Key differences from v2 ``_get_crypto_js()``:
     - Salt is hex-encoded (not base64).
@@ -620,7 +620,7 @@ def _get_crypto_js_v3() -> str:  # noqa: E501
     - Returns ``{blob, meta}`` (raw Blob) instead of ``{content, meta}`` (base64 string).
     """
     return """
-// pagevault v3 chunked crypto runtime
+// pagevault v4 chunked crypto runtime
 (function() {
   'use strict';
 
@@ -662,7 +662,7 @@ def _get_crypto_js_v3() -> str:  # noqa: E501
     );
   }
 
-  async function decryptV3Chunked(envelope, password, username, onProgress) {
+  async function decryptV4Chunked(envelope, password, username, onProgress) {
     try {
       const salt = hexToBytes(envelope.salt);
       const secret = username ? username + ':' + password : password;
@@ -714,21 +714,21 @@ def _get_crypto_js_v3() -> str:  # noqa: E501
       const blob = new Blob(parts, { type: meta.mime || 'application/octet-stream' });
       return { blob: blob, meta: meta };
     } catch (e) {
-      console.error('v3 decryption failed:', e);
+      console.error('v4 decryption failed:', e);
       return null;
     }
   }
 
   window.__pagevault = window.__pagevault || {};
-  window.__pagevault.decryptV3Chunked = decryptV3Chunked;
+  window.__pagevault.decryptV4Chunked = decryptV4Chunked;
 })();"""
 
 
-def _get_renderer_js_v3(viewers: list) -> str:  # noqa: E501
-    """Generate the v3 file renderer JS with viewer dispatch table and progress bar.
+def _get_renderer_js_v4(viewers: list) -> str:  # noqa: E501
+    """Generate the v4 file renderer JS with viewer dispatch table and progress bar.
 
     Reads the envelope from ``<script id="pv-meta">``, uses
-    ``decryptV3Chunked`` (from ``_get_crypto_js_v3``), and shows a
+    ``decryptV4Chunked`` (from ``_get_crypto_js_v4``), and shows a
     progress bar during chunk decryption. After decryption, dispatches
     to the appropriate viewer or download fallback.
 
@@ -741,7 +741,7 @@ def _get_renderer_js_v3(viewers: list) -> str:  # noqa: E501
     viewer_defs, dispatch_table = _build_viewer_dispatch(viewers)
 
     return f"""
-// pagevault v3 chunked renderer
+// pagevault v4 chunked renderer
 (function() {{
   'use strict';
 
@@ -809,7 +809,7 @@ def _get_renderer_js_v3(viewers: list) -> str:  # noqa: E501
       }}
     }}
 
-    var result = await window.__pagevault.decryptV3Chunked(envelope, password, username, onProgress);
+    var result = await window.__pagevault.decryptV4Chunked(envelope, password, username, onProgress);
     if (!result) {{
       if (progressContainer) progressContainer.remove();
       errorDiv.textContent = 'Wrong password';

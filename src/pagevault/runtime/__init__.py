@@ -42,6 +42,6 @@ def build_region_js(
 
     inner = prelude + "\n".join(parts)
 
-    header = "\n/* pagevault runtime v2 */\n(function() {\n  'use strict';\n\n"
+    header = "\n/* pagevault runtime v4 */\n(function() {\n  'use strict';\n\n"
     footer = "\n})();\n"
     return header + inner + footer

@@ -563,11 +563,11 @@ class TestPadRoundtrip:
             assert "Multi-user padded" in decrypted
 
 
-class TestV3WrapIntegration:
-    """End-to-end tests for v3 chunked wrap/unwrap."""
+class TestV4WrapIntegration:
+    """End-to-end tests for v4 chunked wrap/unwrap."""
 
     def test_wrap_file_cli_roundtrip(self, tmp_path):
-        """Lock a non-HTML file via CLI, verify output is v3."""
+        """Lock a non-HTML file via CLI, verify output is v4."""
         runner = CliRunner()
         test_file = tmp_path / "report.pdf"
         test_file.write_bytes(b"%PDF-1.4" + b"\x00" * 1000)
@@ -578,7 +578,7 @@ class TestV3WrapIntegration:
         )
         assert result.exit_code == 0, result.output
 
-        # Verify v3 structure
+        # Verify v4 structure
         content = output.read_text()
         soup = BeautifulSoup(content, "html.parser")
         meta_el = soup.find("script", {"id": "pv-meta"})
@@ -588,7 +588,7 @@ class TestV3WrapIntegration:
         assert envelope["v"] == 4
 
     def test_wrap_site_cli_roundtrip(self, tmp_path):
-        """Lock --site via CLI, verify output is v3."""
+        """Lock --site via CLI, verify output is v4."""
         runner = CliRunner()
         site = tmp_path / "mysite"
         site.mkdir()
@@ -673,8 +673,8 @@ class TestV3WrapIntegration:
         assert data == original
         assert meta["type"] == "file"
 
-    def test_info_then_check_v3(self, tmp_path):
-        """Info and check commands both work on v3 files."""
+    def test_info_then_check_v4(self, tmp_path):
+        """Info and check commands both work on v4 files."""
         runner = CliRunner()
         test_file = tmp_path / "test.txt"
         test_file.write_text("Hello!")
@@ -688,7 +688,7 @@ class TestV3WrapIntegration:
         # Info
         result = runner.invoke(main, ["info", str(output)])
         assert result.exit_code == 0, result.output
-        assert "v3" in result.output
+        assert "v4" in result.output
 
         # Check correct password
         result = runner.invoke(main, ["check", str(output), "-p", "pw"])

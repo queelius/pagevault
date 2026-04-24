@@ -1019,14 +1019,14 @@ def info(path):
     if pv_meta_el:
         import json
 
-        from .crypto import inspect_payload_v3
+        from .crypto import inspect_payload_v4
 
         try:
             envelope = json.loads(pv_meta_el.string)
         except (json.JSONDecodeError, TypeError) as e:
             raise click.ClickException(f"Invalid pv-meta JSON: {e}") from e
 
-        info_data = inspect_payload_v3(envelope)
+        info_data = inspect_payload_v4(envelope)
 
         click.echo(f"File: {_relative_path(file_path)}")
         click.echo("Format:         v4 chunked (wrap)")
@@ -1069,7 +1069,7 @@ def info(path):
     # --- v4 region-encrypted format: envelopes inside <pagevault data-pv-v4> ---
     import json
 
-    from .crypto import inspect_payload_v3
+    from .crypto import inspect_payload_v4
 
     elements = soup.find_all("pagevault")
     encrypted_regions = [el for el in elements if el.has_attr("data-pv-v4")]
@@ -1100,7 +1100,7 @@ def info(path):
         else:
             try:
                 envelope = json.loads(meta_script.string)
-                info_data = inspect_payload_v3(envelope)
+                info_data = inspect_payload_v4(envelope)
                 click.echo(f"  Version:      v{info_data['version']}")
                 click.echo(f"  Algorithm:    {info_data['algorithm']}")
                 click.echo(f"  KDF:          {info_data['kdf']}")
@@ -1377,7 +1377,7 @@ def check(path, password, username):
 
     import json
 
-    from .crypto import verify_password_v3
+    from .crypto import verify_password_v4
 
     # Check wrap-level v4 envelope first (document-level pv-meta script)
     pv_meta_el = soup.find("script", {"id": "pv-meta"})
@@ -1406,7 +1406,7 @@ def check(path, password, username):
             raise click.ClickException(f"Invalid region envelope JSON: {e}") from e
 
     try:
-        result = verify_password_v3(envelope, password, username=username)
+        result = verify_password_v4(envelope, password, username=username)
     except PagevaultError as e:
         raise click.ClickException(str(e)) from e
 
