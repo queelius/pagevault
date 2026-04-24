@@ -1,0 +1,4 @@
+# file: /home/spinoza/github/repos/pagevault/src/pagevault/runtime/_loader.py
+# hypothesis_version: 6.139.2
+
+['"', '/', '</', '<\\/', '\\', '\\"', '\\\\', '\\n', '\\r', 'pagevault.runtime', 'utf-8']

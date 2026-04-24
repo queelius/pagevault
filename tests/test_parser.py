@@ -255,6 +255,15 @@ class TestIsAlreadyEncrypted:
 class TestLockHtml:
     """Tests for lock_html function."""
 
+    def test_lock_produces_v4_envelope(self):
+        """Lock output uses the v4 script-tag envelope, not v2 attribute."""
+        html = "<pagevault>Secret</pagevault>"
+        locked = lock_html(html, password="pw")
+        assert "data-pv-v4" in locked
+        assert "data-pv-meta" in locked
+        assert 'data-pv-chunk="0"' in locked
+        assert "data-encrypted=" not in locked
+
     def test_basic_encryption(self):
         """Test basic HTML encryption."""
         html = """<!DOCTYPE html>
@@ -267,8 +276,8 @@ class TestLockHtml:
 
         result = lock_html(html, "password")
 
-        # Should have data-encrypted attribute
-        assert "data-encrypted=" in result
+        # Should have v4 envelope markers
+        assert "data-pv-v4" in result
         # Original content should be gone
         assert "Secret content" not in result
         # Should have injected runtime

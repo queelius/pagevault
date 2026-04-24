@@ -4,6 +4,7 @@ Handles finding <pagevault> elements, extracting content,
 and replacing with encrypted versions.
 """
 
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,8 +16,8 @@ from .config import DefaultsConfig, PagevaultConfig, TemplateConfig
 from .crypto import (
     PagevaultError,
     content_hash,
-    decrypt,
-    encrypt,
+    decrypt_chunked,
+    encrypt_chunked,
     pad_content,
     rewrap_keys,
 )
@@ -184,9 +185,9 @@ def is_already_encrypted(element: Tag) -> bool:
         element: pagevault Tag element.
 
     Returns:
-        True if element has data-encrypted attribute.
+        True if element has data-pv-v4 attribute (v4 envelope marker).
     """
-    return element.has_attr("data-encrypted")
+    return element.has_attr("data-pv-v4")
 
 
 def lock_html(
@@ -238,11 +239,11 @@ def lock_html(
 
     for element in elements:
         # Skip already-encrypted elements — preserving their ciphertext.
-        # Re-encrypting would overwrite with encrypt("") (the element's
-        # inner content was cleared during the previous lock), silently
-        # destroying the original payload. To compose encryption layers,
-        # explicitly wrap with mark_elements first — that creates a new
-        # outer <pagevault> whose inner content IS the encrypted element.
+        # Re-encrypting would overwrite with an encryption of the empty
+        # content (cleared during previous lock), silently destroying the
+        # original payload. To compose encryption layers, explicitly wrap
+        # with mark_elements first — that creates a new outer <pagevault>
+        # whose inner content IS the encrypted element.
         if is_already_encrypted(element):
             had_encrypted = True
             continue
@@ -265,12 +266,23 @@ def lock_html(
         # Apply content padding if requested (prevents size leakage)
         use_pad = pad or (config and config.pad)
         plaintext = pad_content(inner_html) if use_pad else inner_html
+        plaintext_bytes = plaintext.encode("utf-8")
 
-        encrypted_data = encrypt(
-            plaintext, password=password, salt=salt, users=users, meta=meta
+        # Build region metadata: merge user-supplied meta with required
+        # region fields. content_hash and kind take precedence.
+        region_meta = dict(meta)
+        region_meta["kind"] = "html_fragment"
+        region_meta["content_hash"] = hash_value
+
+        envelope, chunks = encrypt_chunked(
+            plaintext_bytes,
+            password=password,
+            salt=salt,
+            users=users,
+            meta=region_meta,
         )
 
-        # Clear element content and set encrypted attributes
+        # Clear element content and set v4 attributes
         element.clear()
 
         # Remove original attributes (only data- prefixed versions survive)
@@ -278,8 +290,7 @@ def lock_html(
             if attr_name in element.attrs:
                 del element[attr_name]
 
-        element["data-encrypted"] = encrypted_data
-        element["data-content-hash"] = hash_value
+        element["data-pv-v4"] = ""
 
         for attr_name, value in (
             ("hint", hint),
@@ -292,6 +303,21 @@ def lock_html(
         # Set data-mode when multi-user
         if users:
             element["data-mode"] = "user"
+
+        # Append envelope as JSON in <script data-pv-meta>
+        meta_script = soup.new_tag("script")
+        meta_script["type"] = "application/json"
+        meta_script["data-pv-meta"] = ""
+        meta_script.string = json.dumps(envelope)
+        element.append(meta_script)
+
+        # Append each chunk as <script type="x-pv" data-pv-chunk="N">
+        for i, chunk_b64 in enumerate(chunks):
+            chunk_script = soup.new_tag("script")
+            chunk_script["type"] = "x-pv"
+            chunk_script["data-pv-chunk"] = str(i)
+            chunk_script.string = chunk_b64
+            element.append(chunk_script)
 
         encrypted_any = True
 

@@ -1,0 +1,4 @@
+# file: /home/spinoza/github/repos/pagevault/src/pagevault/viewers/builtins/image.py
+# hypothesis_version: 6.139.2
+
+['image', 'image.css', 'image.js', 'image/*']

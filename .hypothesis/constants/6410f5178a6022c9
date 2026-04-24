@@ -1,0 +1,4 @@
+# file: /home/spinoza/github/repos/pagevault/src/pagevault/viewers/base.py
+# hypothesis_version: 6.139.2
+
+['^[a-z][a-z0-9_]*$', '__abstractmethods__', 'mime_types', 'name', 'pagevault.js', 'utf-8', 'viewers']

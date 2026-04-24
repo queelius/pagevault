@@ -1,0 +1,4 @@
+# file: /home/spinoza/github/repos/pagevault/src/pagevault/viewers/registry.py
+# hypothesis_version: 6.139.2
+
+['*.py', '/', '/*', '_', '__abstractmethods__', 'builtins', 'viewers', 'viewers_dir']
