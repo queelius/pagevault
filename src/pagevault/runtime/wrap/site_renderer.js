@@ -205,49 +205,8 @@
       return html;
     }
 
-    function injectNavScript(html) {
-      // Intercept clicks on internal links and forward to parent via postMessage.
-      // Split 'script' tags to avoid closing the outer <script> in the wrapper HTML.
-      var tag = '<scr' + 'ipt>' +
-        // Fetch shim for local resource requests
-        'var __pvFetchId=0,__pvFetchWaiters={};' +
-        'window.addEventListener("message",function(e){' +
-        'if(e.data&&e.data.type==="pagevault-fetch-response"&&__pvFetchWaiters[e.data.id]){' +
-        '__pvFetchWaiters[e.data.id](e.data);delete __pvFetchWaiters[e.data.id];}});' +
-        'var __pvOrigFetch=window.fetch;' +
-        'window.fetch=function(input,init){' +
-        'if(typeof input==="string"&&!input.match(/^(https?:|data:|blob:|about:|\\/\\/)/)){' +
-        'return new Promise(function(resolve,reject){' +
-        'var id=++__pvFetchId;' +
-        '__pvFetchWaiters[id]=function(resp){' +
-        'if(resp.data){__pvOrigFetch(resp.data).then(resolve,reject);}' +
-        'else{__pvOrigFetch(input,init).then(resolve,reject);}};' +
-        'window.parent.postMessage({type:"pagevault-fetch",path:input,id:id},"*");' +
-        '});}' +
-        'return __pvOrigFetch.call(window,input,init);};' +
-        'document.addEventListener("click",function(e){' +
-        'var a=e.target.closest("a");if(!a)return;' +
-        'var h=a.getAttribute("href");' +
-        'if(!h||h.startsWith("http://")||h.startsWith("https://")||' +
-        'h.startsWith("//")||h.startsWith("#")||h.startsWith("data:")||' +
-        'h.startsWith("javascript:")||h.startsWith("mailto:"))return;' +
-        'if(a.target==="_blank")return;' +
-        'e.preventDefault();' +
-        'window.parent.postMessage({type:"pagevault-nav",href:h},"*");' +
-        '});' +
-        'document.addEventListener("submit",function(e){' +
-        'var f=e.target;if(!f||f.tagName!=="FORM")return;' +
-        'var a=f.getAttribute("action");' +
-        'if(!a||a.startsWith("http://")||a.startsWith("https://")||' +
-        'a.startsWith("//")||a.startsWith("data:"))return;' +
-        'e.preventDefault();' +
-        'window.parent.postMessage({type:"pagevault-nav",href:a},"*");' +
-        '});' +
-        '</scr' + 'ipt>';
-      var idx = html.lastIndexOf('</body>');
-      if (idx !== -1) return html.slice(0, idx) + tag + html.slice(idx);
-      return html + tag;
-    }
+    // injectNavScript is defined by nav_injector.js, which is included
+    // before site_renderer.js in the build_wrap_js assembly order.
 
     function resolvePath(fromPage, href) {
       if (!href) return fromPage;
