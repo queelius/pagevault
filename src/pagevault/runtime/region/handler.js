@@ -10,44 +10,10 @@
       this.el._pvDecrypted = false;
       // Snapshot v4 envelope + chunks before rendering the prompt
       // (rendering clears innerHTML which would discard them).
-      this._snapshot = this._readEnvelope(el);
+      // readV4FromScope is provided by core/chunks.js.
+      this._snapshot = readV4FromScope(el);
       this._render();
       this._tryAutoDecrypt();
-    }
-
-    _readEnvelope(el) {
-      // Find <script data-pv-meta> as direct child of the <pagevault> element.
-      let metaScript = null;
-      for (const child of el.children) {
-        if (child.tagName === 'SCRIPT' && child.hasAttribute('data-pv-meta')) {
-          metaScript = child;
-          break;
-        }
-      }
-      if (!metaScript) return null;
-
-      let envelope;
-      try {
-        envelope = JSON.parse(metaScript.textContent);
-      } catch (e) {
-        console.error('Invalid pv-meta JSON:', e);
-        return null;
-      }
-
-      // Collect chunks in index order.
-      const chunkTags = [];
-      for (const child of el.children) {
-        if (child.tagName === 'SCRIPT' && child.hasAttribute('data-pv-chunk')) {
-          const idx = parseInt(child.getAttribute('data-pv-chunk'), 10);
-          if (!Number.isNaN(idx)) {
-            chunkTags.push([idx, child.textContent || '']);
-          }
-        }
-      }
-      chunkTags.sort(function(a, b) { return a[0] - b[0]; });
-      const chunks = chunkTags.map(function(t) { return t[1]; });
-
-      return { envelope: envelope, chunks: chunks };
     }
 
     _render() {

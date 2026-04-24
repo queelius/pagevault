@@ -35,6 +35,7 @@ def build_region_js(
     parts = [
         _load_asset("core/escape.js"),
         _load_asset("core/crypto.js"),
+        _load_asset("core/chunks.js"),
         _load_asset("core/storage.js"),
         _load_asset("core/activation.js"),
         _load_asset("region/handler.js"),
