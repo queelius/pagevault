@@ -61,3 +61,9 @@ examples/test2/
 # OS
 .DS_Store
 Thumbs.db
+
+# Playwright MCP debug logs (generated during test sessions)
+.playwright-mcp/
+
+# Ad-hoc screenshots in repo root (use docs/ for intentional screenshots)
+/*.png

@@ -1182,8 +1182,14 @@ def _get_site_renderer_js() -> str:
         return true;
       }
 
-      // Listen for internal link clicks and fetch requests from iframe
+      // Listen for internal link clicks and fetch requests from iframe.
+      // Origin check: only accept messages from our own iframe. Under HTTP,
+      // any other page/frame on the same origin could otherwise forge
+      // pagevault-nav/pagevault-fetch messages. Under file:// this is moot
+      // (all file:// frames have opaque origins), but the guard is defense
+      // in depth.
       window.addEventListener('message', function(e) {
+        if (e.source !== iframe.contentWindow) return;
         if (!e.data || !e.data.type) return;
         if (e.data.type === 'pagevault-nav') {
           var href = e.data.href;

@@ -1546,3 +1546,11 @@ class TestFetchInterception:
         js = _get_site_renderer_js()
         # The shim should check for http/https/data/blob prefixes
         assert "https?:" in js or "http" in js
+
+    def test_parent_verifies_message_source(self):
+        """Parent message handler must verify e.source === iframe.contentWindow
+        to reject forged messages from other frames (defense-in-depth under
+        HTTP-served sites; moot under file:// where all origins are opaque)."""
+        from pagevault.wrap import _get_site_renderer_js
+        js = _get_site_renderer_js()
+        assert "e.source !== iframe.contentWindow" in js
