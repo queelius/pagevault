@@ -291,7 +291,7 @@ def _derive_chunk_iv(iv_base: bytes, chunk_index: int) -> bytes:
     return bytes(iv)
 
 
-def encrypt_chunked(
+def encrypt_v4(
     data: bytes,
     password: str | None = None,
     salt: bytes | None = None,
@@ -380,7 +380,7 @@ def encrypt_chunked(
     return envelope, chunk_b64_list
 
 
-def decrypt_chunked(
+def decrypt_v4(
     envelope: dict,
     chunks: list[str],
     password: str,
@@ -392,7 +392,7 @@ def decrypt_chunked(
     each chunk using counter-derived IVs and concatenates the results.
 
     Args:
-        envelope: The v3 envelope dict from encrypt_chunked().
+        envelope: The v3 envelope dict from encrypt_v4().
         chunks: List of base64-encoded chunk ciphertexts.
         password: The password used for encryption.
         username: Optional username for multi-user content.

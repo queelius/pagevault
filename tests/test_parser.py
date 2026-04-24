@@ -613,7 +613,7 @@ class TestContentHashIntegrity:
     """Tests for content hash storage and verification.
 
     In v4, content_hash is carried inside the encrypted metadata payload
-    (envelope.meta.content_hash after decrypt_chunked), not as a DOM
+    (envelope.meta.content_hash after decrypt_v4), not as a DOM
     attribute. These tests decrypt the envelope to verify the hash.
     """
 
@@ -622,7 +622,7 @@ class TestContentHashIntegrity:
         """Extract decrypted envelope metadata from a locked HTML string."""
         import json as _json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         soup = BeautifulSoup(locked_html, "html.parser")
         results = []
@@ -640,7 +640,7 @@ class TestContentHashIntegrity:
                     key=lambda s: int(s["data-pv-chunk"]),
                 )
             ]
-            _, meta = decrypt_chunked(envelope, chunks, password, username=username)
+            _, meta = decrypt_v4(envelope, chunks, password, username=username)
             results.append(meta)
         return results
 
@@ -1167,7 +1167,7 @@ class TestAutoMetadata:
         """Test lock_html auto-populates meta with encrypted_at and version."""
         import json as _json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         html = "<pagevault>Meta test</pagevault>"
 
@@ -1186,7 +1186,7 @@ class TestAutoMetadata:
                 key=lambda s: int(s["data-pv-chunk"]),
             )
         ]
-        content_bytes, meta = decrypt_chunked(envelope, chunks, "password")
+        content_bytes, meta = decrypt_v4(envelope, chunks, "password")
 
         assert content_bytes.decode("utf-8") == "Meta test"
         assert meta is not None
@@ -1198,7 +1198,7 @@ class TestAutoMetadata:
         """Test content hash is computed on inner HTML, not on meta."""
         import json as _json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         html = "<pagevault>Hash test content</pagevault>"
         expected_hash = content_hash("Hash test content")
@@ -1218,7 +1218,7 @@ class TestAutoMetadata:
                 key=lambda s: int(s["data-pv-chunk"]),
             )
         ]
-        _, meta = decrypt_chunked(envelope, chunks, "password")
+        _, meta = decrypt_v4(envelope, chunks, "password")
         assert meta["content_hash"] == expected_hash
 
 

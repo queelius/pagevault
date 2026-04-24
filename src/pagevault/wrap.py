@@ -14,7 +14,7 @@ from .config import PagevaultConfig
 from .crypto import (
     PagevaultError,
     content_hash_bytes,
-    encrypt_chunked,
+    encrypt_v4,
     pad_content_bytes,
 )
 from .viewers import discover_viewers, resolve_viewer
@@ -71,7 +71,7 @@ def _encrypt_payload(
     use_pad = pad or (config and config.pad)
     payload = pad_content_bytes(data) if use_pad else data
 
-    envelope, chunks = encrypt_chunked(
+    envelope, chunks = encrypt_v4(
         payload,
         password=password,
         salt=config.salt if config else None,

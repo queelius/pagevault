@@ -14,8 +14,8 @@ from pagevault.crypto import (
     _wrap_key,
     content_hash,
     content_hash_bytes,
-    decrypt_chunked,
-    encrypt_chunked,
+    decrypt_v4,
+    encrypt_v4,
     generate_salt,
     hex_to_salt,
     inspect_payload_v3,
@@ -125,44 +125,44 @@ class TestMultiUserChunked:
         plaintext = b"Shared secret content"
         users = {"alice": "pw-a", "bob": "pw-b"}
 
-        env, chunks = encrypt_chunked(plaintext, users=users)
+        env, chunks = encrypt_v4(plaintext, users=users)
 
         # Both users can decrypt
-        content_a, _ = decrypt_chunked(env, chunks, "pw-a", username="alice")
+        content_a, _ = decrypt_v4(env, chunks, "pw-a", username="alice")
         assert content_a == plaintext
 
-        content_b, _ = decrypt_chunked(env, chunks, "pw-b", username="bob")
+        content_b, _ = decrypt_v4(env, chunks, "pw-b", username="bob")
         assert content_b == plaintext
 
     def test_multiuser_wrong_username_fails(self):
         """Decrypt with wrong username should fail."""
         users = {"alice": "pw-a", "bob": "pw-b"}
-        env, chunks = encrypt_chunked(b"Secret", users=users)
+        env, chunks = encrypt_v4(b"Secret", users=users)
 
         with pytest.raises(PagevaultError, match="wrong password"):
-            decrypt_chunked(env, chunks, "pw-a", username="charlie")
+            decrypt_v4(env, chunks, "pw-a", username="charlie")
 
     def test_multiuser_wrong_password_fails(self):
         """Decrypt with right username but wrong password should fail."""
-        env, chunks = encrypt_chunked(b"Secret", users={"alice": "pw-a"})
+        env, chunks = encrypt_v4(b"Secret", users={"alice": "pw-a"})
 
         with pytest.raises(PagevaultError, match="wrong password"):
-            decrypt_chunked(env, chunks, "wrong-pw", username="alice")
+            decrypt_v4(env, chunks, "wrong-pw", username="alice")
 
     def test_cannot_specify_both_password_and_users(self):
         """Specifying both password and users should raise PagevaultError."""
         with pytest.raises(PagevaultError, match="Cannot specify both"):
-            encrypt_chunked(b"test", password="pw", users={"alice": "pw-a"})
+            encrypt_v4(b"test", password="pw", users={"alice": "pw-a"})
 
     def test_must_specify_password_or_users(self):
         """Specifying neither password nor users should raise PagevaultError."""
         with pytest.raises(PagevaultError, match="Must specify either"):
-            encrypt_chunked(b"test")
+            encrypt_v4(b"test")
 
     def test_shared_salt_across_key_blobs(self):
         """All key blobs in a multi-user envelope share the same salt."""
         users = {"alice": "pw-a", "bob": "pw-b", "charlie": "pw-c"}
-        env, _ = encrypt_chunked(b"test", users=users)
+        env, _ = encrypt_v4(b"test", users=users)
 
         assert "salt" in env
         assert len(env["keys"]) == 3
@@ -172,7 +172,7 @@ class TestMultiUserChunked:
     def test_unique_wrap_ivs(self):
         """Each key blob should have a different IV."""
         users = {"alice": "pw-a", "bob": "pw-b", "charlie": "pw-c"}
-        env, _ = encrypt_chunked(b"test", users=users)
+        env, _ = encrypt_v4(b"test", users=users)
         ivs = [blob["iv"] for blob in env["keys"]]
         assert len(set(ivs)) == len(ivs)
 
@@ -184,16 +184,16 @@ class TestMetadataChunked:
         """Encrypt with metadata and verify it survives decryption."""
         meta = {"key": "value"}
         data = b"Content with metadata"
-        env, chunks = encrypt_chunked(data, password="pw", meta=meta)
-        content, returned_meta = decrypt_chunked(env, chunks, "pw")
+        env, chunks = encrypt_v4(data, password="pw", meta=meta)
+        content, returned_meta = decrypt_v4(env, chunks, "pw")
 
         assert content == data
         assert returned_meta == meta
 
     def test_no_metadata_returns_empty_dict(self):
         """Encrypt without meta returns an empty dict on decrypt."""
-        env, chunks = encrypt_chunked(b"No metadata here", password="pw")
-        content, returned_meta = decrypt_chunked(env, chunks, "pw")
+        env, chunks = encrypt_v4(b"No metadata here", password="pw")
+        content, returned_meta = decrypt_v4(env, chunks, "pw")
 
         assert content == b"No metadata here"
         assert returned_meta == {}
@@ -206,19 +206,19 @@ class TestMetadataChunked:
             "settings": {"level": 3, "enabled": True},
         }
 
-        env, chunks = encrypt_chunked(b"Nested metadata", password="pw", meta=meta)
-        content, returned_meta = decrypt_chunked(env, chunks, "pw")
+        env, chunks = encrypt_v4(b"Nested metadata", password="pw", meta=meta)
+        content, returned_meta = decrypt_v4(env, chunks, "pw")
 
         assert content == b"Nested metadata"
         assert returned_meta == meta
 
     def test_metadata_does_not_affect_content(self):
         """Same content with different meta should decrypt to same content."""
-        env1, ch1 = encrypt_chunked(b"Same content", password="pw", meta={"a": 1})
-        env2, ch2 = encrypt_chunked(b"Same content", password="pw", meta={"b": 2})
+        env1, ch1 = encrypt_v4(b"Same content", password="pw", meta={"a": 1})
+        env2, ch2 = encrypt_v4(b"Same content", password="pw", meta={"b": 2})
 
-        content1, meta1 = decrypt_chunked(env1, ch1, "pw")
-        content2, meta2 = decrypt_chunked(env2, ch2, "pw")
+        content1, meta1 = decrypt_v4(env1, ch1, "pw")
+        content2, meta2 = decrypt_v4(env2, ch2, "pw")
 
         assert content1 == content2 == b"Same content"
         assert meta1 == {"a": 1}
@@ -252,7 +252,7 @@ class TestKeyWrapping:
 
 # NOTE: rewrap_keys() was a v2-only API and is removed in v0.4.0.
 # Re-wrapping for v4 envelopes happens at the parser layer
-# (parser.sync_html_keys) or by re-encrypting via encrypt_chunked().
+# (parser.sync_html_keys) or by re-encrypting via encrypt_v4().
 
 
 class TestPadContent:
@@ -302,8 +302,8 @@ class TestPadContent:
         padded = pad_content(original)
         assert len(padded.encode("utf-8")) > len(original.encode("utf-8"))
 
-        env, chunks = encrypt_chunked(padded.encode("utf-8"), password="pw")
-        decrypted_bytes, _meta = decrypt_chunked(env, chunks, "pw")
+        env, chunks = encrypt_v4(padded.encode("utf-8"), password="pw")
+        decrypted_bytes, _meta = decrypt_v4(env, chunks, "pw")
 
         stripped = decrypted_bytes.decode("utf-8").rstrip("\x00")
         assert stripped == original
@@ -344,52 +344,52 @@ class TestChunkedEncryption:
     def test_basic_roundtrip(self):
         """Encrypt bytes then decrypt, verify roundtrip."""
         data = b"Hello, World! This is test content."
-        envelope, chunks = encrypt_chunked(data, password="test-pw")
-        result_data, result_meta = decrypt_chunked(envelope, chunks, "test-pw")
+        envelope, chunks = encrypt_v4(data, password="test-pw")
+        result_data, result_meta = decrypt_v4(envelope, chunks, "test-pw")
         assert result_data == data
 
     def test_single_chunk(self):
         """Data smaller than chunk_size produces exactly one chunk."""
         data = b"small"
-        envelope, chunks = encrypt_chunked(data, password="pw")
+        envelope, chunks = encrypt_v4(data, password="pw")
         assert envelope["chunk_count"] == 1
         assert len(chunks) == 1
 
     def test_exact_chunk_boundary(self):
         """Data exactly equal to chunk_size produces one chunk."""
         data = b"x" * CHUNK_SIZE
-        envelope, chunks = encrypt_chunked(data, password="pw")
+        envelope, chunks = encrypt_v4(data, password="pw")
         assert envelope["chunk_count"] == 1
         assert len(chunks) == 1
 
     def test_two_chunks(self):
         """Data slightly over chunk_size produces two chunks."""
         data = b"x" * (CHUNK_SIZE + 1)
-        envelope, chunks = encrypt_chunked(data, password="pw")
+        envelope, chunks = encrypt_v4(data, password="pw")
         assert envelope["chunk_count"] == 2
         assert len(chunks) == 2
 
     def test_large_data_roundtrip(self):
         """Roundtrip with multiple chunks."""
         data = os.urandom(CHUNK_SIZE * 3 + 500)
-        envelope, chunks = encrypt_chunked(data, password="pw")
+        envelope, chunks = encrypt_v4(data, password="pw")
         assert envelope["chunk_count"] == 4
-        result_data, _ = decrypt_chunked(envelope, chunks, "pw")
+        result_data, _ = decrypt_v4(envelope, chunks, "pw")
         assert result_data == data
 
     def test_empty_data(self):
         """Empty bytes encrypt and decrypt correctly."""
         data = b""
-        envelope, chunks = encrypt_chunked(data, password="pw")
+        envelope, chunks = encrypt_v4(data, password="pw")
         assert envelope["chunk_count"] == 0
         assert len(chunks) == 0
-        result_data, _ = decrypt_chunked(envelope, chunks, "pw")
+        result_data, _ = decrypt_v4(envelope, chunks, "pw")
         assert result_data == b""
 
     def test_envelope_fields(self):
         """Envelope dict contains all required v3 fields."""
         data = b"test"
-        envelope, _ = encrypt_chunked(data, password="pw")
+        envelope, _ = encrypt_v4(data, password="pw")
         assert envelope["v"] == VERSION_V3
         assert envelope["alg"] == "aes-256-gcm"
         assert envelope["kdf"] == "pbkdf2-sha256"
@@ -407,25 +407,25 @@ class TestChunkedEncryption:
         """Metadata is encrypted and recoverable."""
         data = b"test"
         meta = {"type": "file", "filename": "test.txt", "mime": "text/plain"}
-        envelope, chunks = encrypt_chunked(data, password="pw", meta=meta)
-        _, result_meta = decrypt_chunked(envelope, chunks, "pw")
+        envelope, chunks = encrypt_v4(data, password="pw", meta=meta)
+        _, result_meta = decrypt_v4(envelope, chunks, "pw")
         assert result_meta == meta
 
     def test_wrong_password_fails(self):
         """Decryption with wrong password raises error."""
         data = b"secret"
-        envelope, chunks = encrypt_chunked(data, password="correct")
+        envelope, chunks = encrypt_v4(data, password="correct")
         with pytest.raises(PagevaultError, match="wrong password"):
-            decrypt_chunked(envelope, chunks, "wrong")
+            decrypt_v4(envelope, chunks, "wrong")
 
     def test_multiuser_roundtrip(self):
         """Multi-user encrypt then decrypt as each user."""
         data = b"shared content"
         users = {"alice": "pw-a", "bob": "pw-b"}
-        envelope, chunks = encrypt_chunked(data, users=users)
+        envelope, chunks = encrypt_v4(data, users=users)
 
-        data_a, _ = decrypt_chunked(envelope, chunks, "pw-a", username="alice")
-        data_b, _ = decrypt_chunked(envelope, chunks, "pw-b", username="bob")
+        data_a, _ = decrypt_v4(envelope, chunks, "pw-a", username="alice")
+        data_b, _ = decrypt_v4(envelope, chunks, "pw-b", username="bob")
         assert data_a == data
         assert data_b == data
 
@@ -433,48 +433,48 @@ class TestChunkedEncryption:
         """Explicit salt is used in envelope."""
         salt = generate_salt()
         data = b"test"
-        envelope, _ = encrypt_chunked(data, password="pw", salt=salt)
+        envelope, _ = encrypt_v4(data, password="pw", salt=salt)
         assert envelope["salt"] == salt_to_hex(salt)
 
     def test_custom_chunk_size(self):
         """Custom chunk_size is respected."""
         data = b"x" * 100
-        envelope, chunks = encrypt_chunked(data, password="pw", chunk_size=30)
+        envelope, chunks = encrypt_v4(data, password="pw", chunk_size=30)
         assert envelope["chunk_size"] == 30
         assert envelope["chunk_count"] == 4  # ceil(100/30)
         assert len(chunks) == 4
-        result, _ = decrypt_chunked(envelope, chunks, "pw")
+        result, _ = decrypt_v4(envelope, chunks, "pw")
         assert result == data
 
     def test_different_ciphertext_each_time(self):
         """Same data produces different ciphertext (random IV + CEK)."""
         data = b"same content"
-        _, chunks1 = encrypt_chunked(data, password="pw")
-        _, chunks2 = encrypt_chunked(data, password="pw")
+        _, chunks1 = encrypt_v4(data, password="pw")
+        _, chunks2 = encrypt_v4(data, password="pw")
         assert chunks1 != chunks2
 
     def test_truncated_chunks_raises(self):
         """Passing fewer chunks than expected raises error."""
         data = b"x" * 100
-        envelope, chunks = encrypt_chunked(data, password="pw", chunk_size=30)
+        envelope, chunks = encrypt_v4(data, password="pw", chunk_size=30)
         assert len(chunks) == 4
         with pytest.raises(PagevaultError, match="length mismatch"):
-            decrypt_chunked(envelope, chunks[:2], "pw")
+            decrypt_v4(envelope, chunks[:2], "pw")
 
     def test_chunk_size_zero_raises(self):
         """chunk_size=0 raises PagevaultError."""
         with pytest.raises(PagevaultError, match="chunk_size must be positive"):
-            encrypt_chunked(b"data", password="pw", chunk_size=0)
+            encrypt_v4(b"data", password="pw", chunk_size=0)
 
     def test_chunk_size_negative_raises(self):
         """chunk_size<0 raises PagevaultError."""
         with pytest.raises(PagevaultError, match="chunk_size must be positive"):
-            encrypt_chunked(b"data", password="pw", chunk_size=-1)
+            encrypt_v4(b"data", password="pw", chunk_size=-1)
 
     def test_empty_users_dict_raises(self):
         """Empty users dict raises PagevaultError."""
         with pytest.raises(PagevaultError, match="must not be empty"):
-            encrypt_chunked(b"data", users={})
+            encrypt_v4(b"data", users={})
 
     def test_iv_counter_overflow_raises(self):
         """Chunk index >= 2^32 raises error."""
@@ -514,7 +514,7 @@ class TestInspectPayloadV3:
 
     def test_inspect_v3(self):
         data = b"x" * 100
-        envelope, _ = encrypt_chunked(data, password="pw")
+        envelope, _ = encrypt_v4(data, password="pw")
         info = inspect_payload_v3(envelope)
         assert info["version"] == 4
         assert info["algorithm"] == "aes-256-gcm"
@@ -526,7 +526,7 @@ class TestInspectPayloadV3:
     def test_inspect_v3_multiuser(self):
         data = b"test"
         users = {"alice": "pw-a", "bob": "pw-b"}
-        envelope, _ = encrypt_chunked(data, users=users)
+        envelope, _ = encrypt_v4(data, users=users)
         info = inspect_payload_v3(envelope)
         assert info["key_count"] == 2
 
@@ -535,15 +535,15 @@ class TestVerifyPasswordV3:
     """Tests for verify_password_v3 with chunked payloads."""
 
     def test_correct_password(self):
-        envelope, _ = encrypt_chunked(b"secret", password="correct")
+        envelope, _ = encrypt_v4(b"secret", password="correct")
         assert verify_password_v3(envelope, "correct") is True
 
     def test_wrong_password(self):
-        envelope, _ = encrypt_chunked(b"secret", password="correct")
+        envelope, _ = encrypt_v4(b"secret", password="correct")
         assert verify_password_v3(envelope, "wrong") is False
 
     def test_multiuser(self):
-        envelope, _ = encrypt_chunked(b"shared", users={"alice": "pw-a", "bob": "pw-b"})
+        envelope, _ = encrypt_v4(b"shared", users={"alice": "pw-a", "bob": "pw-b"})
         assert verify_password_v3(envelope, "pw-a", username="alice") is True
         assert verify_password_v3(envelope, "pw-b", username="bob") is True
         assert verify_password_v3(envelope, "pw-a", username="bob") is False

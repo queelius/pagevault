@@ -13,7 +13,7 @@ from click.testing import CliRunner
 
 from pagevault.cli import main
 from pagevault.config import PagevaultConfig, create_default_config, load_config
-from pagevault.crypto import CHUNK_SIZE, decrypt_chunked, encrypt_chunked
+from pagevault.crypto import CHUNK_SIZE, decrypt_v4, encrypt_v4
 from pagevault.parser import (
     lock_html,
     mark_body,
@@ -27,7 +27,7 @@ class TestCryptoCompatibility:
 
     def test_envelope_format_is_webcrypto_compatible(self):
         """Test v4 envelope format can be parsed by browser."""
-        env, chunks = encrypt_chunked(b"test content", password="password")
+        env, chunks = encrypt_v4(b"test content", password="password")
 
         # v4 envelope shape
         assert env["v"] == 4
@@ -645,7 +645,7 @@ class TestV3WrapIntegration:
         assert soup.find("script", {"id": "pv-3"}) is None
 
     def test_wrap_file_decrypt_roundtrip(self, tmp_path):
-        """Full roundtrip: wrap file via CLI, parse HTML, decrypt_chunked."""
+        """Full roundtrip: wrap file via CLI, parse HTML, decrypt_v4."""
         runner = CliRunner()
         test_file = tmp_path / "data.bin"
         original = os.urandom(2048)
@@ -669,7 +669,7 @@ class TestV3WrapIntegration:
             chunks.append(el.string.strip())
             i += 1
 
-        data, meta = decrypt_chunked(envelope, chunks, "pw")
+        data, meta = decrypt_v4(envelope, chunks, "pw")
         assert data == original
         assert meta["type"] == "file"
 

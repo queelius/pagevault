@@ -16,8 +16,8 @@ from .config import DefaultsConfig, PagevaultConfig, TemplateConfig
 from .crypto import (
     PagevaultError,
     content_hash,
-    decrypt_chunked,
-    encrypt_chunked,
+    decrypt_v4,
+    encrypt_v4,
     pad_content,
 )
 
@@ -273,7 +273,7 @@ def lock_html(
         region_meta["kind"] = "html_fragment"
         region_meta["content_hash"] = hash_value
 
-        envelope, chunks = encrypt_chunked(
+        envelope, chunks = encrypt_v4(
             plaintext_bytes,
             password=password,
             salt=salt,
@@ -409,7 +409,7 @@ def unlock_html(
             )
 
         # Decrypt via v4 (chunked) path
-        plaintext_bytes, dec_meta = decrypt_chunked(
+        plaintext_bytes, dec_meta = decrypt_v4(
             envelope, chunks, password, username=username
         )
 
@@ -554,7 +554,7 @@ def sync_html_keys(
         if old_users:
             for uname, upwd in old_users.items():
                 try:
-                    recovered_pt, recovered_meta = decrypt_chunked(
+                    recovered_pt, recovered_meta = decrypt_v4(
                         envelope, chunks, upwd, username=uname
                     )
                     break
@@ -562,7 +562,7 @@ def sync_html_keys(
                     continue
         elif old_password is not None:
             try:
-                recovered_pt, recovered_meta = decrypt_chunked(
+                recovered_pt, recovered_meta = decrypt_v4(
                     envelope, chunks, old_password, username=old_username
                 )
             except PagevaultError as e:
@@ -575,12 +575,12 @@ def sync_html_keys(
         if recovered_pt is None:
             raise PagevaultError("Cannot recover CEK: no valid old credentials")
 
-        # Re-encrypt under the new credential set. encrypt_chunked will
+        # Re-encrypt under the new credential set. encrypt_v4 will
         # produce a fresh CEK either way; setting rekey=False vs True has
         # no wire-level distinction in v4 (each rewrap gets a fresh CEK),
         # but we preserve the kwarg for API compatibility.
         _ = rekey  # Kept for API compatibility; always produces fresh CEK in v4.
-        new_envelope, new_chunks = encrypt_chunked(
+        new_envelope, new_chunks = encrypt_v4(
             recovered_pt,
             password=new_password,
             users=new_users,

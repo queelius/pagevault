@@ -122,7 +122,7 @@ class TestWrapFile:
         """Test that the v3 encrypted payload can be decrypted."""
         import json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         test_file = tmp_path / "secret.txt"
         test_file.write_text("Secret data!")
@@ -143,7 +143,7 @@ class TestWrapFile:
             i += 1
 
         # Decrypt
-        data, meta = decrypt_chunked(envelope, chunks, "test-pw")
+        data, meta = decrypt_v4(envelope, chunks, "test-pw")
 
         # The data should be the raw file bytes (no base64 layer in v3)
         assert data == b"Secret data!"
@@ -178,7 +178,7 @@ class TestWrapFile:
         """Test wrapping with multi-user encryption."""
         import json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         test_file = tmp_path / "shared.txt"
         test_file.write_text("Shared secret")
@@ -204,8 +204,8 @@ class TestWrapFile:
             i += 1
 
         # Both users should be able to decrypt
-        data_a, _ = decrypt_chunked(envelope, chunks, "pw-a", username="alice")
-        data_b, _ = decrypt_chunked(envelope, chunks, "pw-b", username="bob")
+        data_a, _ = decrypt_v4(envelope, chunks, "pw-a", username="alice")
+        data_b, _ = decrypt_v4(envelope, chunks, "pw-b", username="bob")
         assert data_a == b"Shared secret"
         assert data_b == b"Shared secret"
 
@@ -233,7 +233,7 @@ class TestWrapFile:
         """Test wrapping a larger file."""
         import json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         test_file = tmp_path / "large.bin"
         test_file.write_bytes(b"x" * 100000)
@@ -253,7 +253,7 @@ class TestWrapFile:
             chunks.append(el.string.strip())
             i += 1
 
-        data, meta = decrypt_chunked(envelope, chunks, "pw")
+        data, meta = decrypt_v4(envelope, chunks, "pw")
         assert data == b"x" * 100000
 
     def test_wrap_unicode_filename(self, tmp_path):
@@ -311,7 +311,7 @@ class TestWrapSite:
         """Test wrapping site with custom entry point."""
         import json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         site_dir = tmp_path / "site"
         site_dir.mkdir()
@@ -331,7 +331,7 @@ class TestWrapSite:
             chunks.append(el.string.strip())
             i += 1
 
-        _, meta = decrypt_chunked(envelope, chunks, "pw")
+        _, meta = decrypt_v4(envelope, chunks, "pw")
         assert meta["entry"] == "home.html"
 
     def test_site_encrypted_payload_contains_zip(self, tmp_path):
@@ -340,7 +340,7 @@ class TestWrapSite:
         import zipfile
         from io import BytesIO
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         site_dir = tmp_path / "site"
         site_dir.mkdir()
@@ -361,7 +361,7 @@ class TestWrapSite:
             chunks.append(el.string.strip())
             i += 1
 
-        data, meta = decrypt_chunked(envelope, chunks, "pw")
+        data, meta = decrypt_v4(envelope, chunks, "pw")
 
         # Meta should list files
         assert meta["type"] == "site"
@@ -381,7 +381,7 @@ class TestWrapSite:
         """Test wrapping site with nested directories."""
         import json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         site_dir = tmp_path / "site"
         site_dir.mkdir()
@@ -407,7 +407,7 @@ class TestWrapSite:
             chunks.append(el.string.strip())
             i += 1
 
-        _, meta = decrypt_chunked(envelope, chunks, "pw")
+        _, meta = decrypt_v4(envelope, chunks, "pw")
 
         assert "index.html" in meta["files"]
         assert "images/logo.png" in meta["files"]
@@ -452,7 +452,7 @@ class TestWrapSite:
         """Test wrapping site with multi-user encryption."""
         import json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         site_dir = tmp_path / "site"
         site_dir.mkdir()
@@ -478,8 +478,8 @@ class TestWrapSite:
             chunks.append(el.string.strip())
             i += 1
 
-        _, meta_a = decrypt_chunked(envelope, chunks, "pw-a", username="alice")
-        _, meta_b = decrypt_chunked(envelope, chunks, "pw-b", username="bob")
+        _, meta_a = decrypt_v4(envelope, chunks, "pw-a", username="alice")
+        _, meta_b = decrypt_v4(envelope, chunks, "pw-b", username="bob")
         assert meta_a["type"] == "site"
         assert meta_b["type"] == "site"
 
@@ -614,7 +614,7 @@ salt: "0123456789abcdef0123456789abcdef"
         """Test wrap site with custom entry point (now using lock --site)."""
         import json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         site_dir = tmp_path / "site"
         site_dir.mkdir()
@@ -656,7 +656,7 @@ salt: "0123456789abcdef0123456789abcdef"
             chunks.append(el.string.strip())
             i += 1
 
-        _, meta = decrypt_chunked(envelope, chunks, "test-password")
+        _, meta = decrypt_v4(envelope, chunks, "test-password")
         assert meta["entry"] == "home.html"
 
     def test_wrap_site_missing_entry_fails(self, runner, tmp_path, sample_config):
@@ -930,7 +930,7 @@ class TestSiteResourceStringRewriting:
         and include all files in the zip payload."""
         import json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         site_dir = tmp_path / "site"
         site_dir.mkdir()
@@ -970,7 +970,7 @@ class TestSiteResourceStringRewriting:
             chunks.append(el.string.strip())
             i += 1
 
-        _, meta = decrypt_chunked(envelope, chunks, "pw")
+        _, meta = decrypt_v4(envelope, chunks, "pw")
 
         assert "index.html" in meta["files"]
         assert "media/a.png" in meta["files"]
@@ -1018,9 +1018,9 @@ class TestWrapFileV3:
             chunks.append(el.string.strip())
             i += 1
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
-        data, meta = decrypt_chunked(envelope, chunks, "test-pw")
+        data, meta = decrypt_v4(envelope, chunks, "test-pw")
         assert data == b"Secret data!"
         assert meta["filename"] == "secret.txt"
         assert meta["mime"] == "text/plain"
@@ -1048,9 +1048,9 @@ class TestWrapFileV3:
             chunks.append(el.string.strip())
             i += 1
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
-        data, meta = decrypt_chunked(envelope, chunks, "pw")
+        data, meta = decrypt_v4(envelope, chunks, "pw")
         assert data == original_bytes
         assert meta["mime"] == "image/png"
 
@@ -1114,9 +1114,9 @@ class TestWrapSiteV3:
             chunks.append(el.string.strip())
             i += 1
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
-        data, meta = decrypt_chunked(envelope, chunks, "pw")
+        data, meta = decrypt_v4(envelope, chunks, "pw")
 
         assert meta["type"] == "site"
         assert meta["entry"] == "index.html"
@@ -1157,7 +1157,7 @@ class TestWrapSiteV3:
         """Multi-user site wrap should decrypt for each user."""
         import json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         site_dir = tmp_path / "site"
         site_dir.mkdir()
@@ -1182,8 +1182,8 @@ class TestWrapSiteV3:
             chunks.append(el.string.strip())
             i += 1
 
-        _, meta_a = decrypt_chunked(envelope, chunks, "pw-a", username="alice")
-        _, meta_b = decrypt_chunked(envelope, chunks, "pw-b", username="bob")
+        _, meta_a = decrypt_v4(envelope, chunks, "pw-a", username="alice")
+        _, meta_b = decrypt_v4(envelope, chunks, "pw-b", username="bob")
         assert meta_a["type"] == "site"
         assert meta_b["type"] == "site"
 
@@ -1191,7 +1191,7 @@ class TestWrapSiteV3:
         """Subdirectories should be preserved in v3 zip payload."""
         import json
 
-        from pagevault.crypto import decrypt_chunked
+        from pagevault.crypto import decrypt_v4
 
         site_dir = tmp_path / "site"
         site_dir.mkdir()
@@ -1212,7 +1212,7 @@ class TestWrapSiteV3:
             chunks.append(el.string.strip())
             i += 1
 
-        _, meta = decrypt_chunked(envelope, chunks, "pw")
+        _, meta = decrypt_v4(envelope, chunks, "pw")
         assert "index.html" in meta["files"]
         assert "images/logo.png" in meta["files"]
 
