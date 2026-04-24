@@ -477,7 +477,10 @@ class TestMultipleElements:
         # Both should be encrypted
         assert "First" not in result
         assert "Second" not in result
-        assert result.count("data-pv-v4") == 2
+        # Count pagevault elements with data-pv-v4 attribute
+        assert len(BeautifulSoup(result, "html.parser").find_all(
+            "pagevault", attrs={"data-pv-v4": True}
+        )) == 2
         assert 'data-hint="hint1"' in result
         assert 'data-hint="hint2"' in result
 
@@ -516,7 +519,10 @@ class TestMultipleElements:
         result = lock_html(html, "password")
 
         # Both end up with v4 envelope in the output
-        assert result.count("data-pv-v4") == 2
+        # Count pagevault elements with data-pv-v4 attribute
+        assert len(BeautifulSoup(result, "html.parser").find_all(
+            "pagevault", attrs={"data-pv-v4": True}
+        )) == 2
         assert "New content" not in result
         # The pre-existing envelope is PRESERVED: unlock should return
         # "Already encrypted" for the first region.
@@ -837,7 +843,8 @@ class TestComposableEncryption:
         encrypted2 = lock_html(wrapped2, "member-password")
 
         # Both sections should be encrypted
-        assert encrypted2.count("data-pv-v4") == 2
+        soup = BeautifulSoup(encrypted2, "html.parser")
+        assert len(soup.find_all("pagevault", attrs={"data-pv-v4": True})) == 2
         assert "Admin content" not in encrypted2
         assert "Member content" not in encrypted2
 

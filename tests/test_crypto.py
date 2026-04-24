@@ -932,7 +932,7 @@ class TestInspectPayloadV3:
         data = b"x" * 100
         envelope, _ = encrypt_chunked(data, password="pw")
         info = inspect_payload_v3(envelope)
-        assert info["version"] == 3
+        assert info["version"] == 4
         assert info["algorithm"] == "aes-256-gcm"
         assert info["chunk_count"] == 1
         assert info["chunk_size"] == CHUNK_SIZE

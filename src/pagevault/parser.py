@@ -685,7 +685,7 @@ pagevault {{
   display: block;
 }}
 
-pagevault[data-encrypted] {{
+pagevault[data-pv-v4] {{
   min-height: 200px;
   display: flex;
   align-items: center;

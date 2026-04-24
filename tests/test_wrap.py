@@ -103,7 +103,7 @@ class TestWrapFile:
         content = output.read_text()
         soup = BeautifulSoup(content, "html.parser")
         envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
-        assert envelope["v"] == 3
+        assert envelope["v"] == 4
         assert "Protected: image.png" in content
 
     def test_wrap_pdf(self, tmp_path):
@@ -293,7 +293,7 @@ class TestWrapSite:
         pv = soup.find("pagevault")
         assert pv.get("data-pv-chunked") == "true"
         envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
-        assert envelope["v"] == 3
+        assert envelope["v"] == 4
 
     def test_site_custom_output(self, tmp_path):
         """Test wrapping site with custom output path."""

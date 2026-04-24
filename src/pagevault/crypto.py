@@ -19,8 +19,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # Cryptographic parameters (must match browser-side implementation)
-VERSION = 2
-VERSION_V3 = 3
+VERSION = 2  # Legacy v2 constant — retained for v2 encrypt/decrypt paths only.
+VERSION_V3 = 4  # Envelope version for the chunked (v4) format. Name kept pre-rename.
 ALGORITHM = "aes-256-gcm"
 KDF = "pbkdf2-sha256"
 ITERATIONS = 310000

@@ -68,7 +68,7 @@ class TestInlineScriptActivation:
             "</script></pagevault></body></html>"
         )
         locked = lock_html(html, password="test")
-        assert "data-encrypted" in locked
+        assert "data-pv-v4" in locked
         unlocked = unlock_html(locked, password="test")
         assert 'document.getElementById("app")' in unlocked
 

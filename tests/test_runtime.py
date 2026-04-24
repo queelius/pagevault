@@ -24,10 +24,10 @@ def test_config_prelude_injected():
     assert "Custom Title" in js
 
 
-def test_build_region_js_contains_decrypt_content():
-    """build_region_js output must include decryptContent function."""
+def test_build_region_js_contains_decrypt_v4():
+    """build_region_js output must include decryptV4 function (v4 chunked)."""
     js = build_region_js()
-    assert "decryptContent" in js
+    assert "decryptV4" in js
 
 
 def test_build_region_js_contains_storage_key():

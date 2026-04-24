@@ -591,7 +591,7 @@ class TestV3WrapIntegration:
         assert meta_el is not None
 
         envelope = json.loads(meta_el.string)
-        assert envelope["v"] == 3
+        assert envelope["v"] == 4
 
     def test_wrap_site_cli_roundtrip(self, tmp_path):
         """Lock --site via CLI, verify output is v3."""
@@ -613,7 +613,7 @@ class TestV3WrapIntegration:
         assert meta_el is not None
 
         envelope = json.loads(meta_el.string)
-        assert envelope["v"] == 3
+        assert envelope["v"] == 4
 
     def test_region_encryption_uses_v4(self, tmp_path):
         """HTML region encryption (parser.py) produces v4 envelopes."""

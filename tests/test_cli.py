@@ -606,7 +606,10 @@ class TestSelectorLock:
         assert "1 file(s) locked" in result.output
 
         content = (output_dir / "index.html").read_text()
-        assert content.count("data-pv-v4") == 2
+        from bs4 import BeautifulSoup
+        assert len(BeautifulSoup(content, "html.parser").find_all(
+            "pagevault", attrs={"data-pv-v4": True}
+        )) == 2
         assert "Secret content here" not in content
         assert "Private section" not in content
 
@@ -835,7 +838,10 @@ class TestSelectorLock:
 
         # Final file should have both sections locked
         content = (pass2_dir / "index.html").read_text()
-        assert content.count("data-pv-v4") == 2
+        from bs4 import BeautifulSoup
+        assert len(BeautifulSoup(content, "html.parser").find_all(
+            "pagevault", attrs={"data-pv-v4": True}
+        )) == 2
         assert "Admin content" not in content
         assert "Member content" not in content
         assert 'data-title="Admin Area"' in content
@@ -3352,7 +3358,7 @@ class TestInfoV3:
 
         result = runner.invoke(main, ["info", str(out_path)])
         assert result.exit_code == 0
-        assert "Version:        v3" in result.output
+        assert "Version:        v4" in result.output
 
     def test_info_v3_chunk_tags(self, runner, tmp_path):
         """Info on v3 file counts chunk script tags."""

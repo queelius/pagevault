@@ -8,8 +8,46 @@
     constructor(el) {
       this.el = el;
       this.el._pvDecrypted = false;
+      // Snapshot v4 envelope + chunks before rendering the prompt
+      // (rendering clears innerHTML which would discard them).
+      this._snapshot = this._readEnvelope(el);
       this._render();
       this._tryAutoDecrypt();
+    }
+
+    _readEnvelope(el) {
+      // Find <script data-pv-meta> as direct child of the <pagevault> element.
+      let metaScript = null;
+      for (const child of el.children) {
+        if (child.tagName === 'SCRIPT' && child.hasAttribute('data-pv-meta')) {
+          metaScript = child;
+          break;
+        }
+      }
+      if (!metaScript) return null;
+
+      let envelope;
+      try {
+        envelope = JSON.parse(metaScript.textContent);
+      } catch (e) {
+        console.error('Invalid pv-meta JSON:', e);
+        return null;
+      }
+
+      // Collect chunks in index order.
+      const chunkTags = [];
+      for (const child of el.children) {
+        if (child.tagName === 'SCRIPT' && child.hasAttribute('data-pv-chunk')) {
+          const idx = parseInt(child.getAttribute('data-pv-chunk'), 10);
+          if (!Number.isNaN(idx)) {
+            chunkTags.push([idx, child.textContent || '']);
+          }
+        }
+      }
+      chunkTags.sort(function(a, b) { return a[0] - b[0]; });
+      const chunks = chunkTags.map(function(t) { return t[1]; });
+
+      return { envelope: envelope, chunks: chunks };
     }
 
     _render() {
@@ -98,19 +136,28 @@
 
     async _decrypt(password, username) {
       const el = this.el;
-      const encrypted = el.getAttribute('data-encrypted');
-      if (!encrypted) return false;
+      if (!this._snapshot) return false;
 
-      const expectedHash = el.getAttribute('data-content-hash');
-
-      const result = await decryptContent(encrypted, password, username);
+      const result = await decryptV4(
+        this._snapshot.envelope,
+        this._snapshot.chunks,
+        password,
+        username
+      );
       if (result === null) return false;
 
-      // Strip null-byte padding (from --pad option during lock)
-      const content = result.content.replace(/\0+$/, '');
-      const meta = result.meta;
+      const meta = result.meta || {};
+      if (meta.kind && meta.kind !== 'html_fragment') {
+        console.error('Unexpected envelope kind for region:', meta.kind);
+        return false;
+      }
 
-      // Verify content hash if present
+      // Decode UTF-8 text and strip trailing NUL padding (from --pad).
+      let content = new TextDecoder().decode(result.bytes);
+      content = content.replace(/\0+$/, '');
+
+      // Verify content hash if present in encrypted metadata.
+      const expectedHash = meta.content_hash;
       if (expectedHash) {
         const actualHash = await computeHash(content);
         if (actualHash !== expectedHash) {
@@ -119,9 +166,8 @@
         }
       }
 
-      // Remove encrypted attributes and reveal content
-      el.removeAttribute('data-encrypted');
-      el.removeAttribute('data-content-hash');
+      // Clear v4 attributes and reveal content.
+      el.removeAttribute('data-pv-v4');
       el.removeAttribute('data-mode');
       // Decrypted content is trusted — it was authenticated by AES-256-GCM
       // (user encrypted their own content; AES-GCM provides authenticity)
@@ -152,11 +198,11 @@
     }
   }
 
-  // Initialize all encrypted <pagevault> elements.
+  // Initialize all v4-encrypted <pagevault> elements.
   // Wrapped in DOMContentLoaded since the script is in <head> but the
   // elements are in <body> — they don't exist yet at script parse time.
   function initAll() {
-    document.querySelectorAll('pagevault[data-encrypted]').forEach(function(el) {
+    document.querySelectorAll('pagevault[data-pv-v4]').forEach(function(el) {
       if (!el._pvHandler) {
         el._pvHandler = new PagevaultHandler(el);
       }
