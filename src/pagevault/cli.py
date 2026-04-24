@@ -1044,11 +1044,19 @@ def info(path):
         if "content_hash" in envelope:
             click.echo(f"Content hash:   {envelope['content_hash']}")
 
-        # Count chunk script tags
-        chunk_count = 0
-        while soup.find("script", {"id": f"pv-{chunk_count}"}):
-            chunk_count += 1
-        click.echo(f"Chunk tags:     {chunk_count}")
+        # Count chunk script tags in a single DOM pass (previously O(N²)
+        # via while soup.find). If it disagrees with the envelope, surface
+        # the mismatch — that's an integrity signal worth showing.
+        chunk_id_re = re.compile(r"^pv-\d+$")
+        chunk_tags_found = len(soup.find_all("script", {"id": chunk_id_re}))
+        envelope_count = info_data["chunk_count"]
+        if chunk_tags_found == envelope_count:
+            click.echo(f"Chunk tags:     {chunk_tags_found}")
+        else:
+            click.echo(
+                f"Chunk tags:     {chunk_tags_found} "
+                f"(WARNING: envelope says {envelope_count})"
+            )
 
         # Check pagevault element for mode
         pv_el = soup.find("pagevault")

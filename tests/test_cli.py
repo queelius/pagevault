@@ -3364,6 +3364,23 @@ class TestInfoV3:
         assert result.exit_code == 0
         assert "Chunk tags:" in result.output
 
+    def test_info_v3_chunk_count_multichunk(self, runner, tmp_path):
+        """Info on a multi-chunk v3 file reports the right count in one
+        DOM pass (regression: was O(N²) via while soup.find)."""
+        # 3 MB file with default 1 MB chunk size → 3 chunks
+        big_path = tmp_path / "big.bin"
+        big_path.write_bytes(b"x" * (3 * 1024 * 1024))
+        out_path = tmp_path / "big.html"
+
+        runner.invoke(main, ["lock", str(big_path), "-p", "pw", "-o", str(out_path)])
+
+        result = runner.invoke(main, ["info", str(out_path)])
+        assert result.exit_code == 0
+        assert "Chunks:         3" in result.output
+        assert "Chunk tags:     3" in result.output
+        # The envelope and DOM should agree — no WARNING
+        assert "WARNING" not in result.output
+
     def test_info_v3_site_mode(self, runner, tmp_path):
         """Info on v3 site shows site-related info."""
         site_dir = tmp_path / "site"
