@@ -72,7 +72,7 @@ pagevault audit [-c CONFIG]
 
 ## Key Design Constraints
 
-- **Closure property**: Lock output must be valid lock input (composable encryption). Tests verify this via roundtrip and multi-pass scenarios.
+- **Closure property**: `lock(lock(html)) == lock(html)`. Locking is idempotent: already-encrypted elements are skipped, preserving their ciphertext. To compose encryption layers (nested encryption), explicitly wrap an encrypted element with `mark_elements` first.
 - **Attribute preservation**: Original `hint`, `title`, `remember` attributes must survive lock/unlock cycles.
 - **Self-contained output**: Locked HTML must include all JS/CSS — no external dependencies at runtime.
 - **WebCrypto parity**: Python crypto parameters must exactly match the browser-side JS generated in `parser.py` (`_get_javascript()`) and `wrap.py` (`_get_renderer_js()`). The JS is generated via f-strings — `{{`/`}}` produce `{`/`}` in output.

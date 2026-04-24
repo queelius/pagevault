@@ -319,16 +319,18 @@ class TestLockHtml:
         result = lock_html(html, "password")
         assert result == html
 
-    def test_reencrypts_already_encrypted(self):
-        """Test encrypting already-encrypted elements (composability)."""
+    def test_relock_preserves_existing_data_encrypted(self):
+        """Locking an already-encrypted element preserves its ciphertext.
+
+        Previously we re-encrypted, which silently destroyed the original
+        payload (because the element's inner content was already cleared,
+        so we were re-encrypting the empty string). Now we skip."""
         html = '<pagevault data-encrypted="x">Already encrypted</pagevault>'
 
         result = lock_html(html, "password")
 
-        # Should be re-encrypted (composable encryption)
-        assert "data-encrypted=" in result
-        # The original "x" value should be replaced with new encrypted data
-        assert 'data-encrypted="x"' not in result
+        # Ciphertext preserved, not overwritten
+        assert 'data-encrypted="x"' in result
 
     def test_uses_explicit_salt(self):
         """Test encryption uses explicit salt."""
@@ -461,8 +463,10 @@ class TestMultipleElements:
         assert "Second content" in decrypted
         assert "Public content" in decrypted
 
-    def test_encrypts_all_elements(self):
-        """Test that all elements are encrypted including already-encrypted ones."""
+    def test_mixed_elements_preserves_encrypted_and_encrypts_new(self):
+        """lock_html() on a document with a mix of already-encrypted and
+        plaintext <pagevault> elements: preserves the former, encrypts
+        the latter. The final document has both encrypted."""
         from pagevault.crypto import encrypt as crypto_encrypt
 
         enc1 = crypto_encrypt("Already encrypted", password="password")
@@ -474,11 +478,11 @@ class TestMultipleElements:
 
         result = lock_html(html, "password")
 
-        # Both should be encrypted (composable encryption)
+        # Both end up encrypted in the output
         assert result.count("data-encrypted=") == 2
         assert "New content" not in result
-        # The first one should be re-encrypted (different ciphertext)
-        assert f'data-encrypted="{enc1}"' not in result
+        # The pre-existing ciphertext is PRESERVED (not overwritten)
+        assert f'data-encrypted="{enc1}"' in result
 
 
 class TestTemplateCustomization:
@@ -634,26 +638,29 @@ class TestContentHashIntegrity:
 class TestComposableEncryption:
     """Tests for composable/nested encryption (closure property)."""
 
-    def test_encrypt_already_encrypted_element(self):
-        """Test encrypting an already-encrypted element creates nested encryption."""
+    def test_relock_preserves_already_encrypted(self):
+        """Locking an already-encrypted element is a no-op on that element.
+
+        This used to re-encrypt with the new password, silently destroying
+        the original payload (the element's inner content was already
+        cleared during the first lock, so the re-encryption encrypted
+        the empty string). The new behavior preserves the ciphertext."""
         html = "<pagevault>Secret</pagevault>"
 
-        # First encryption
         encrypted1 = lock_html(html, "password1")
         assert "data-encrypted=" in encrypted1
 
-        # Second encryption (re-encrypt)
+        # Second lock is idempotent on the already-encrypted element
         encrypted2 = lock_html(encrypted1, "password2")
 
-        # Should have new encryption (not skipped)
         soup1 = BeautifulSoup(encrypted1, "html.parser")
         soup2 = BeautifulSoup(encrypted2, "html.parser")
 
         data1 = soup1.find("pagevault")["data-encrypted"]
         data2 = soup2.find("pagevault")["data-encrypted"]
 
-        # Content should be different (re-encrypted with new password)
-        assert data1 != data2
+        # Ciphertext PRESERVED (password1 is still the correct password)
+        assert data1 == data2
 
     def test_nested_encryption_via_wrapping(self):
         """Test nested encryption by wrapping encrypted element in new wrapper."""
@@ -689,23 +696,44 @@ class TestComposableEncryption:
         decrypted2 = unlock_html(decrypted1, "inner")
         assert "Secret" in decrypted2
 
-    def test_reencrypt_replaces_ciphertext(self):
-        """Test re-encrypting the same element replaces (not nests) the ciphertext."""
+    def test_relock_preserves_existing_ciphertext(self):
+        """lock_html() on already-locked HTML is idempotent: already-encrypted
+        elements are skipped, preserving their ciphertext.
+
+        This is the closure property: unlock(lock(unlock(lock(html)))) == html.
+        The previous behavior (re-encrypting with the new password, destroying
+        the original ciphertext by encrypting the empty string) was a footgun
+        that silently lost data when users ran `pagevault lock locked.html`.
+
+        To compose encryption layers, explicitly use mark_elements to wrap
+        the encrypted element first — see test_nested_encryption_via_wrapping.
+        """
         html = "<pagevault>Secret</pagevault>"
 
         encrypted1 = lock_html(html, "password1")
         encrypted2 = lock_html(encrypted1, "password2")
 
-        # Only one encrypted element (replaced, not nested)
+        # Still only one encrypted element
         soup = BeautifulSoup(encrypted2, "html.parser")
         elements = soup.find_all("pagevault")
         assert len(elements) == 1
 
-        # The ciphertext should be different from the first encryption
+        # The ciphertext is PRESERVED (not re-encrypted with password2)
         soup1 = BeautifulSoup(encrypted1, "html.parser")
         data1 = soup1.find("pagevault")["data-encrypted"]
         data2 = elements[0]["data-encrypted"]
-        assert data1 != data2
+        assert data1 == data2
+
+        # And the original password still decrypts it
+        decrypted = unlock_html(encrypted2, "password1")
+        assert "Secret" in decrypted
+
+    def test_relock_is_idempotent(self):
+        """lock(lock(html)) == lock(html) structurally — closure property."""
+        html = "<pagevault>A</pagevault><pagevault>B</pagevault>"
+        once = lock_html(html, "pw", salt=b"\x00" * 16)
+        twice = lock_html(once, "pw", salt=b"\x00" * 16)
+        assert once == twice
 
     def test_wrap_existing_pagevault_element(self):
         """Test wrapping an existing pagevault element for nested encryption."""

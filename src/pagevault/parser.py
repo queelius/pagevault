@@ -234,11 +234,18 @@ def lock_html(
         }
 
     encrypted_any = False
+    had_encrypted = False  # Tracks pre-existing encrypted elements (for runtime injection)
 
     for element in elements:
-        # Note: We intentionally do NOT skip already-encrypted elements.
-        # This enables composable encryption (closure property) - the output
-        # of encrypt can be input to encrypt, allowing multi-password workflows.
+        # Skip already-encrypted elements — preserving their ciphertext.
+        # Re-encrypting would overwrite with encrypt("") (the element's
+        # inner content was cleared during the previous lock), silently
+        # destroying the original payload. To compose encryption layers,
+        # explicitly wrap with mark_elements first — that creates a new
+        # outer <pagevault> whose inner content IS the encrypted element.
+        if is_already_encrypted(element):
+            had_encrypted = True
+            continue
 
         # Extract attributes
         hint = element.get("hint") or element.get("data-hint")
@@ -288,9 +295,15 @@ def lock_html(
 
         encrypted_any = True
 
-    if encrypted_any:
-        # Inject the pagevault runtime into <head>
+    # Inject the runtime if we encrypted something OR if we left
+    # pre-existing encrypted elements in place — either way there
+    # are elements on the page that need the runtime.
+    if encrypted_any or had_encrypted:
         _inject_runtime(soup, config, custom_css)
+
+    # If nothing changed, return original html (preserves exact formatting)
+    if not encrypted_any:
+        return html
 
     # Return modified HTML
     # Use formatter=None to preserve original formatting where possible
