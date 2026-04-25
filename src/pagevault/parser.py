@@ -801,7 +801,6 @@ def process_file(
     output_path: Path,
     password: str | None = None,
     config: PagevaultConfig | None = None,
-    encrypt_mode: bool | None = None,
     mode: str | None = None,
     custom_css: str | None = None,
     users: dict[str, str] | None = None,
@@ -816,8 +815,7 @@ def process_file(
         output_path: Path to write output file.
         password: Password for encryption/decryption.
         config: Optional configuration.
-        encrypt_mode: Deprecated. Use mode instead. True for lock, False for unlock.
-        mode: "lock" or "unlock". Takes precedence over encrypt_mode.
+        mode: "lock" or "unlock". Defaults to "lock" when omitted.
         custom_css: Optional custom CSS (overrides config.custom_css).
         users: Dict of {username: password} for multi-user encryption.
         username: Username for decryption in multi-user mode.
@@ -829,13 +827,7 @@ def process_file(
     Raises:
         PagevaultError: If processing fails.
     """
-    # Resolve mode: explicit `mode` wins, then legacy `encrypt_mode`, default = lock
-    if mode is not None:
-        do_lock = mode == "lock"
-    elif encrypt_mode is not None:
-        do_lock = encrypt_mode
-    else:
-        do_lock = True
+    do_lock = mode != "unlock"
 
     try:
         html = input_path.read_text(encoding="utf-8")
