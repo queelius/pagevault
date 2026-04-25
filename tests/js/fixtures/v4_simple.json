@@ -1,0 +1,26 @@
+{
+  "envelope": {
+    "v": 4,
+    "alg": "aes-256-gcm",
+    "kdf": "pbkdf2-sha256",
+    "iter": 310000,
+    "salt": "80f58f60aa6e9f3743a789ae1ae41195",
+    "keys": [
+      {
+        "iv": "3oUoUj4/t+lVi+oH",
+        "ct": "QWUz1TXdpw8ICzmzagoBnzqj3yn0q+X/DHySxt40RLUBynHBFjyOOp7w7x2Pox35"
+      }
+    ],
+    "iv_base": "zkJh4Z3q3smCz6sw",
+    "chunk_size": 1048576,
+    "chunk_count": 1,
+    "total_size": 10,
+    "meta_iv": "o06ggwUlDHVLUGlM",
+    "meta_ct": "T8lL1DAjY3F0bGe6UKwNnplz9e/X5qIQljrKt7SiK3g2Uc38VLqujvFA9sjO3Vx2JQKZqm+r"
+  },
+  "chunks": [
+    "EtOXSAXsVb/GBOOjlj9RfggXd8kHZJK9vgs="
+  ],
+  "password": "testpw",
+  "expected_text": "Hello, v4!"
+}

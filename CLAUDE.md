@@ -22,6 +22,9 @@ pytest tests/ -v --cov=pagevault
 # Lint
 ruff check src/ tests/
 ruff format --check src/ tests/
+
+# Browser-side JS unit tests (Node 20+, no npm deps)
+node --test "tests/js/**/*.mjs"
 ```
 
 ## Architecture
