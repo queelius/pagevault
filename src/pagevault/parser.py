@@ -189,6 +189,48 @@ def is_already_encrypted(element: Tag) -> bool:
     return element.has_attr("data-pv-v4")
 
 
+def _read_v4_region(
+    element: Tag,
+) -> tuple[Tag, dict, list[tuple[int, Tag]]] | None:
+    """Read the v4 envelope + chunk tags from a <pagevault> element.
+
+    Returns ``(meta_script, envelope, chunk_tags)`` where ``chunk_tags`` is
+    sorted by index, or ``None`` when the element has no usable
+    ``<script data-pv-meta>`` child. Shared by ``unlock_html`` and
+    ``sync_html_keys``; the meta_script is exposed so callers can mutate
+    it in place when rewriting the envelope (see :func:`sync_html_keys`).
+
+    Raises:
+        PagevaultError: When the meta script JSON is invalid or a chunk
+            index attribute is non-numeric.
+    """
+    meta_script = None
+    for child in element.find_all("script", recursive=False):
+        if child.has_attr("data-pv-meta"):
+            meta_script = child
+            break
+    if meta_script is None or not meta_script.string:
+        return None
+
+    try:
+        envelope = json.loads(meta_script.string)
+    except json.JSONDecodeError as e:
+        raise PagevaultError(f"Invalid pv-meta JSON: {e}") from e
+
+    chunk_tags: list[tuple[int, Tag]] = []
+    for child in element.find_all("script", recursive=False):
+        if child.has_attr("data-pv-chunk"):
+            try:
+                idx = int(child["data-pv-chunk"])
+            except (TypeError, ValueError) as e:
+                raise PagevaultError(
+                    f"Invalid data-pv-chunk index: {child.get('data-pv-chunk')!r}"
+                ) from e
+            chunk_tags.append((idx, child))
+    chunk_tags.sort(key=lambda t: t[0])
+    return meta_script, envelope, chunk_tags
+
+
 def lock_html(
     html: str,
     password: str | None = None,
@@ -369,36 +411,12 @@ def unlock_html(
         if not is_already_encrypted(element):
             continue  # Skip unencrypted elements
 
-        # Find <script data-pv-meta> child — must be direct child of <pagevault>
-        meta_script = None
-        for child in element.find_all("script", recursive=False):
-            if child.has_attr("data-pv-meta"):
-                meta_script = child
-                break
-
-        if meta_script is None or not meta_script.string:
+        region = _read_v4_region(element)
+        if region is None:
             # Malformed v4 element — no meta script. Skip rather than raise
             # to allow composition with future envelope revisions.
             continue
-
-        try:
-            envelope = json.loads(meta_script.string)
-        except json.JSONDecodeError as e:
-            raise PagevaultError(f"Invalid pv-meta JSON: {e}") from e
-
-        # Collect ordered chunks from <script data-pv-chunk="N"> children
-        chunk_tags: list[tuple[int, Tag]] = []
-        for child in element.find_all("script", recursive=False):
-            if child.has_attr("data-pv-chunk"):
-                try:
-                    idx = int(child["data-pv-chunk"])
-                except (TypeError, ValueError) as e:
-                    raise PagevaultError(
-                        f"Invalid data-pv-chunk index: {child.get('data-pv-chunk')!r}"
-                    ) from e
-                chunk_tags.append((idx, child))
-
-        chunk_tags.sort(key=lambda t: t[0])
+        _, envelope, chunk_tags = region
         chunks = [t[1].string or "" for t in chunk_tags]
 
         # Check if multi-user file but no username provided
@@ -518,31 +536,10 @@ def sync_html_keys(
         if not is_already_encrypted(element):
             continue
 
-        # Extract envelope + chunks from v4 script children
-        meta_script = None
-        for child in element.find_all("script", recursive=False):
-            if child.has_attr("data-pv-meta"):
-                meta_script = child
-                break
-        if meta_script is None or not meta_script.string:
+        region = _read_v4_region(element)
+        if region is None:
             continue
-
-        try:
-            envelope = json.loads(meta_script.string)
-        except json.JSONDecodeError as e:
-            raise PagevaultError(f"Invalid pv-meta JSON: {e}") from e
-
-        chunk_tags: list[tuple[int, Tag]] = []
-        for child in element.find_all("script", recursive=False):
-            if child.has_attr("data-pv-chunk"):
-                try:
-                    idx = int(child["data-pv-chunk"])
-                except (TypeError, ValueError) as e:
-                    raise PagevaultError(
-                        f"Invalid data-pv-chunk index: {child.get('data-pv-chunk')!r}"
-                    ) from e
-                chunk_tags.append((idx, child))
-        chunk_tags.sort(key=lambda t: t[0])
+        meta_script, envelope, chunk_tags = region
         chunks = [t[1].string or "" for t in chunk_tags]
 
         # Recover plaintext by decrypting with any old credential.
