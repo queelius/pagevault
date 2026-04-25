@@ -17,6 +17,12 @@
       return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    // Strip ?query and #fragment from a URL. Used wherever we need the
+    // path-only form for resolving against the in-memory resource map.
+    function stripQueryHash(s) {
+      return s.split('#')[0].split('?')[0];
+    }
+
     // Module-level state — populated by __pagevault_renderSite on each call.
     // The single message listener (below) reads these instead of closure variables.
     var _site_iframe = null;
@@ -30,17 +36,14 @@
       if (_site_iframe === null || e.source !== _site_iframe.contentWindow) return;
       if (!e.data || !e.data.type) return;
       if (e.data.type === 'pagevault-nav') {
-        var href = e.data.href;
-        var clean = href.split('#')[0].split('?')[0];
+        var clean = stripQueryHash(e.data.href);
         if (!clean) return;
         var target = resolvePath(_site_currentPage, clean);
         if (_site_htmlFiles && _site_htmlFiles.has(target)) {
           renderPage(target);
         }
       } else if (e.data.type === 'pagevault-fetch') {
-        var fetchPath = e.data.path;
-        var clean2 = fetchPath.split('#')[0].split('?')[0];
-        var resolved = resolvePath(_site_currentPage, clean2);
+        var resolved = resolvePath(_site_currentPage, stripQueryHash(e.data.path));
         var r = _site_resources && _site_resources[resolved];
         if (r) {
           _site_iframe.contentWindow.postMessage({
@@ -151,16 +154,14 @@
             var parts = entry.trim().split(/\s+/);
             var src = parts[0];
             var descriptor = parts.slice(1).join(' ');
-            var clean = src.split('#')[0].split('?')[0];
-            var resolved = resolvePath(fromPage, clean);
+            var resolved = resolvePath(fromPage, stripQueryHash(src));
             var uri = toDataUri(resolved);
             if (uri) return uri + (descriptor ? ' ' + descriptor : '');
             return entry.trim();
           });
           return attr + '=' + quote + rewritten.join(', ') + quote;
         }
-        var clean = url.split('#')[0].split('?')[0];
-        var resolved = resolvePath(fromPage, clean);
+        var resolved = resolvePath(fromPage, stripQueryHash(url));
         // Leave <a href> to HTML pages alone — nav interceptor handles them
         if (attr.toLowerCase() === 'href' && _site_htmlFiles.has(resolved)) {
           return match;
