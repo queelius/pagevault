@@ -45,6 +45,5 @@ main.add_command(_dev_group, name="dev")
 main.add_command(_inspect, name="inspect")
 
 
-
 if __name__ == "__main__":
     main()
