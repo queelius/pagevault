@@ -13,6 +13,20 @@ from ._loader import _escape_for_script_block, _load_asset, _make_config_prelude
 logger = logging.getLogger(__name__)
 
 
+def _wrap_iife(banner: str, prelude: str, parts: list[str]) -> str:
+    """Wrap a CONFIG prelude + JS parts in a strict-mode IIFE.
+
+    The runtime is always self-contained: callers compose a list of
+    asset bodies (already escaped where needed), and this helper joins
+    them with newlines and emits a single IIFE with the given banner
+    comment.
+    """
+    inner = prelude + "\n".join(parts)
+    header = f"\n/* {banner} */\n(function() {{\n  'use strict';\n\n"
+    footer = "\n})();\n"
+    return header + inner + footer
+
+
 def build_region_js(
     template: TemplateConfig | None = None,
     defaults: DefaultsConfig | None = None,
@@ -35,8 +49,6 @@ def build_region_js(
     if defaults is None:
         defaults = DefaultsConfig()
 
-    prelude = _make_config_prelude(template, defaults)
-
     parts = [
         _load_asset("core/escape.js"),
         _load_asset("core/crypto.js"),
@@ -45,12 +57,11 @@ def build_region_js(
         _load_asset("core/activation.js"),
         _load_asset("region/handler.js"),
     ]
-
-    inner = prelude + "\n".join(parts)
-
-    header = "\n/* pagevault runtime v4 */\n(function() {\n  'use strict';\n\n"
-    footer = "\n})();\n"
-    return header + inner + footer
+    return _wrap_iife(
+        "pagevault runtime v4",
+        _make_config_prelude(template, defaults),
+        parts,
+    )
 
 
 def build_wrap_js(
@@ -83,8 +94,6 @@ def build_wrap_js(
     if template is None:
         template = TemplateConfig()
 
-    prelude = _make_config_prelude(template, DefaultsConfig())
-
     parts = [
         _load_asset("core/escape.js"),
         _load_asset("core/crypto.js"),
@@ -106,11 +115,11 @@ def build_wrap_js(
 
     parts.append(_load_asset("wrap/file_renderer.js"))
 
-    inner = prelude + "\n".join(parts)
-
-    header = "\n/* pagevault wrap runtime v4 */\n(function() {\n  'use strict';\n\n"
-    footer = "\n})();\n"
-    return header + inner + footer
+    return _wrap_iife(
+        "pagevault wrap runtime v4",
+        _make_config_prelude(template, DefaultsConfig()),
+        parts,
+    )
 
 
 def _build_viewer_dispatch(viewers: list) -> str:
