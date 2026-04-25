@@ -365,15 +365,16 @@ def lock_html(
     # Inject the runtime if we encrypted something OR if we left
     # pre-existing encrypted elements in place — either way there
     # are elements on the page that need the runtime.
+    runtime_injected = False
     if encrypted_any or had_encrypted:
-        _inject_runtime(soup, config, custom_css)
+        runtime_injected = _inject_runtime(soup, config, custom_css)
 
-    # If nothing changed, return original html (preserves exact formatting)
-    if not encrypted_any:
+    # If nothing in the document changed (no fresh encryption AND no
+    # runtime injection — the runtime was already present), preserve
+    # the original string exactly. Otherwise serialize the mutated soup.
+    if not encrypted_any and not runtime_injected:
         return html
 
-    # Return modified HTML
-    # Use formatter=None to preserve original formatting where possible
     return str(soup)
 
 
@@ -615,13 +616,18 @@ def _inject_runtime(
     soup: BeautifulSoup,
     config: PagevaultConfig | None = None,
     custom_css: str | None = None,
-) -> None:
+) -> bool:
     """Inject pagevault JavaScript and CSS into the document head.
 
     Args:
         soup: Parsed HTML document.
         config: Optional configuration for template customization.
         custom_css: Optional custom CSS to replace default styles.
+
+    Returns:
+        True if the runtime was injected (style+script appended); False
+        if it was already present or no <html>/<head> exists. Callers
+        use this to decide whether the document was actually mutated.
     """
     head = soup.find("head")
     if not head:
@@ -632,12 +638,12 @@ def _inject_runtime(
             html_tag.insert(0, head)
         else:
             # No html tag either, just return
-            return
+            return False
 
     # Check if already injected
     existing = head.find("script", {"data-pagevault-runtime": True})
     if existing:
-        return
+        return False
 
     # Get template config
     template = config.template if config else TemplateConfig()
@@ -661,6 +667,7 @@ def _inject_runtime(
     script_tag["data-pagevault-runtime"] = "true"
     script_tag.string = _get_javascript(template, defaults)
     head.append(script_tag)
+    return True
 
 
 def _remove_runtime(soup: BeautifulSoup) -> None:

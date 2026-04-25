@@ -454,23 +454,34 @@ def _wrap_site_directory(
 def _find_first_envelope(soup) -> dict | None:
     """Locate and parse the first v4 envelope JSON in a parsed document.
 
-    Tries the wrap-level ``<script id="pv-meta">`` first, then falls back
-    to the first ``<pagevault data-pv-v4>`` region's ``<script data-pv-meta>``
-    child. Returns the parsed envelope dict or ``None`` when neither is
-    present. Used by the inspect/check CLI paths.
+    Detects format via the pagevault element marker (not by script id),
+    so a region-encrypted page that happens to contain plaintext
+    referencing ``pv-meta`` won't be misclassified as wrap.
+
+    Wrap format: ``<pagevault data-pv-chunked>`` + document-level
+    ``<script id="pv-meta">``.
+
+    Region format: ``<pagevault data-pv-v4>`` containing
+    ``<script data-pv-meta>`` as a direct child.
+
+    Returns the parsed envelope dict or ``None`` when neither is present.
 
     Raises:
         click.ClickException: If a meta script exists but its JSON is invalid.
     """
     import json
 
-    pv_meta_el = soup.find("script", {"id": "pv-meta"})
-    if pv_meta_el:
-        try:
-            return json.loads(pv_meta_el.string)
-        except (json.JSONDecodeError, TypeError) as e:
-            raise click.ClickException(f"Invalid pv-meta JSON: {e}") from e
+    # Wrap format: identified by data-pv-chunked on the <pagevault> element
+    if soup.find("pagevault", attrs={"data-pv-chunked": True}):
+        pv_meta_el = soup.find("script", {"id": "pv-meta"})
+        if pv_meta_el:
+            try:
+                return json.loads(pv_meta_el.string)
+            except (json.JSONDecodeError, TypeError) as e:
+                raise click.ClickException(f"Invalid pv-meta JSON: {e}") from e
+        return None
 
+    # Region format: <pagevault data-pv-v4> with child <script data-pv-meta>
     encrypted_el = soup.find("pagevault", attrs={"data-pv-v4": True})
     if encrypted_el is None:
         return None
@@ -493,7 +504,8 @@ def _print_runtime_info(soup) -> None:
     click.echo(f"Runtime scripts: {len(runtime_scripts)}")
     click.echo(f"Runtime styles:  {len(runtime_styles)}")
 
-    viewer_re = r"'([a-z]+/[a-z0-9*+\-.]+)':\s*__pv_"
+    # v4 viewer dispatch shape: window.__pv_viewers['image/*'] = viewer;
+    viewer_re = r"window\.__pv_viewers\[\s*'([a-z]+/[a-z0-9*+\-.]+)'\s*\]"
     for script in runtime_scripts:
         viewer_matches = re.findall(viewer_re, script.string or "")
         if viewer_matches:
@@ -524,9 +536,15 @@ def _print_info(file_path: str) -> None:
 
     soup = _parse_html(content)
 
-    # Check for wrap-level v4 envelope (pv-meta script tag at document level)
-    pv_meta_el = soup.find("script", {"id": "pv-meta"})
-    if pv_meta_el:
+    # Wrap format: identified by <pagevault data-pv-chunked>, not by script id
+    # (a region-encrypted page with plaintext referencing pv-meta would
+    # otherwise be misclassified as wrap).
+    if soup.find("pagevault", attrs={"data-pv-chunked": True}):
+        pv_meta_el = soup.find("script", {"id": "pv-meta"})
+        if pv_meta_el is None:
+            raise click.ClickException(
+                "data-pv-chunked element found but no <script id='pv-meta'>"
+            )
         try:
             envelope = json.loads(pv_meta_el.string)
         except (json.JSONDecodeError, TypeError) as e:

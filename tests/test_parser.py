@@ -385,6 +385,37 @@ class TestLockHtml:
         assert env1["salt"] == salt.hex()
         assert env2["salt"] == salt.hex()
 
+    def test_relock_repairs_missing_runtime(self):
+        """Re-locking an encrypted file without the runtime injects it.
+
+        Regression: previously when a file had `data-pv-v4` elements but
+        no runtime, lock_html would `_inject_runtime(soup)` then return
+        the ORIGINAL string, throwing away the mutated soup. The output
+        was byte-identical to the input — runtime never appeared.
+        """
+        # Lock once, then strip the runtime from the output
+        original = (
+            "<html><head></head><body>"
+            "<pagevault>Secret</pagevault>"
+            "</body></html>"
+        )
+        encrypted = lock_html(original, password="pw")
+        assert "data-pv-v4" in encrypted
+        assert "data-pagevault-runtime" in encrypted
+
+        # Strip runtime tags
+        soup = BeautifulSoup(encrypted, "html.parser")
+        for tag in soup.find_all(attrs={"data-pagevault-runtime": True}):
+            tag.decompose()
+        no_runtime = str(soup)
+        assert "data-pagevault-runtime" not in no_runtime
+        assert "data-pv-v4" in no_runtime
+
+        # Re-lock should re-inject the runtime
+        repaired = lock_html(no_runtime, password="pw")
+        assert "data-pagevault-runtime" in repaired
+        assert "data-pv-v4" in repaired
+
 
 class TestUnlockHtml:
     """Tests for unlock_html function."""
