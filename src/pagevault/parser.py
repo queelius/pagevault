@@ -868,10 +868,3 @@ def process_file(
         raise PagevaultError(f"Cannot write file {output_path}: {e}") from e
 
     return True
-
-
-# Backward-compatibility aliases (tested by test_parser.py)
-encrypt_html = lock_html
-decrypt_html = unlock_html
-wrap_elements_for_encryption = mark_elements
-wrap_body_for_encryption = mark_body

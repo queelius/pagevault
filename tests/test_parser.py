@@ -1258,52 +1258,6 @@ class TestMultiUserUnlockError:
         assert "Secret" in decrypted
 
 
-class TestBackwardCompat:
-    """Tests for backward compatibility of old function name aliases."""
-
-    def test_encrypt_html_alias_works(self):
-        """Test that the old encrypt_html alias still works."""
-        from pagevault.parser import encrypt_html
-
-        html = "<pagevault>Backward compat test</pagevault>"
-
-        result = encrypt_html(html, "password")
-
-        assert "data-pv-v4" in result
-        assert "Backward compat test" not in result
-
-    def test_decrypt_html_alias_works(self):
-        """Test that the old decrypt_html alias still works."""
-        from pagevault.parser import decrypt_html, encrypt_html
-
-        html = "<pagevault>Alias roundtrip</pagevault>"
-
-        encrypted = encrypt_html(html, "password")
-        decrypted = decrypt_html(encrypted, "password")
-
-        assert "Alias roundtrip" in decrypted
-
-    def test_wrap_elements_alias_works(self):
-        """Test that the old wrap_elements_for_encryption alias still works."""
-        from pagevault.parser import wrap_elements_for_encryption
-
-        html = '<html><body><div id="secret">Secret</div></body></html>'
-
-        result = wrap_elements_for_encryption(html, ["#secret"])
-
-        assert "<pagevault>" in result
-
-    def test_wrap_body_alias_works(self):
-        """Test that the old wrap_body_for_encryption alias still works."""
-        from pagevault.parser import wrap_body_for_encryption
-
-        html = "<html><head></head><body><p>Content</p></body></html>"
-
-        result = wrap_body_for_encryption(html)
-
-        assert "<pagevault>" in result
-
-
 class TestEscapeHtmlInRuntime:
     """Tests for escapeHtml function in generated JS runtime."""
 

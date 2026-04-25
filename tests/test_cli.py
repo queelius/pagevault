@@ -2454,7 +2454,7 @@ class TestVersion:
 
         assert result.exit_code == 0
         assert "pagevault" in result.output
-        assert "0.3.2" in result.output
+        assert "0.4.0" in result.output
 
 
 class TestInfoCommand:
