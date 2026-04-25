@@ -4,6 +4,7 @@ Wraps arbitrary files and directories into self-contained encrypted HTML
 that can be decrypted and rendered in the browser.
 """
 
+import html
 import logging
 import mimetypes
 import zipfile
@@ -17,7 +18,12 @@ from .crypto import (
     encrypt_v4,
     pad_content_bytes,
 )
+from .runtime._loader import _escape_for_script_block
 from .viewers import discover_viewers, resolve_viewer
+
+# Re-exported for tests that import from pagevault.wrap. The canonical
+# implementation lives in runtime._loader; this avoids two copies drifting.
+__all__ = ["_escape_for_script_block"]
 
 logger = logging.getLogger(__name__)
 
@@ -248,16 +254,6 @@ def _log_active_viewers(viewers: list) -> None:
         )
 
 
-def _html_escape(s: str) -> str:
-    """Escape a string for HTML attribute values."""
-    return (
-        s.replace("&", "&amp;")
-        .replace('"', "&quot;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-
-
 def _get_wrap_css(template) -> str:
     """Generate framework CSS for the wrap password prompt and viewer chrome.
 
@@ -420,18 +416,6 @@ pagevault[data-decrypted] {{
 """
 
 
-def _escape_for_script_block(s: str) -> str:
-    """Escape content for safe embedding inside a <script> or <style> block.
-
-    Replaces ``</`` with ``<\\/`` to prevent premature closing of the
-    enclosing HTML tag. This is the same defense used by _js_string()
-    in parser.py — see MEMORY.md "Script-tag breakout" entry.
-    """
-    return s.replace("</", "<\\/")
-
-
-
-
 def _get_progress_css() -> str:
     """Generate CSS for the v4 chunk-decryption progress bar."""
     return """
@@ -552,7 +536,7 @@ def _generate_wrap_html_v4(  # noqa: E501
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{_html_escape(title)}</title>
+  <title>{html.escape(title, quote=True)}</title>
   <style data-pagevault-runtime>{css}</style>
 </head>
 <body>
