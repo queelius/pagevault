@@ -331,32 +331,26 @@ def _lock_html_files(
             continue
 
         try:
-            # If content was wrapped (selector or body), write modified content
-            # to output first, then encrypt from output
+            # If content was wrapped (selector or body), the modified
+            # plaintext lives only in `content` — write it to output first
+            # so process_file can read+encrypt from there. Otherwise read
+            # straight from the input path.
             if content_was_wrapped or selectors:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_text(content, encoding="utf-8")
-                changed = process_file(
-                    output_path,
-                    output_path,
-                    password=password,
-                    config=config,
-                    mode="lock",
-                    custom_css=custom_css,
-                    users=users,
-                    pad=pad,
-                )
+                source_path = output_path
             else:
-                changed = process_file(
-                    input_path,
-                    output_path,
-                    password=password,
-                    config=config,
-                    mode="lock",
-                    custom_css=custom_css,
-                    users=users,
-                    pad=pad,
-                )
+                source_path = input_path
+            changed = process_file(
+                source_path,
+                output_path,
+                password=password,
+                config=config,
+                mode="lock",
+                custom_css=custom_css,
+                users=users,
+                pad=pad,
+            )
             if changed:
                 click.echo(f"Locked: {rel_input} -> {rel_output}")
                 processed += 1
