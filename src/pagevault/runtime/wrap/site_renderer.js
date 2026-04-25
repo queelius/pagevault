@@ -45,20 +45,13 @@
       } else if (e.data.type === 'pagevault-fetch') {
         var resolved = resolvePath(_site_currentPage, stripQueryHash(e.data.path));
         var r = _site_resources && _site_resources[resolved];
-        if (r) {
-          _site_iframe.contentWindow.postMessage({
-            type: 'pagevault-fetch-response',
-            id: e.data.id,
-            data: toDataUri(resolved),
-            mime: r.mime
-          }, '*');
-        } else {
-          _site_iframe.contentWindow.postMessage({
-            type: 'pagevault-fetch-response',
-            id: e.data.id,
-            data: null
-          }, '*');
-        }
+        var response = {
+          type: 'pagevault-fetch-response',
+          id: e.data.id,
+          data: r ? toDataUri(resolved) : null
+        };
+        if (r) response.mime = r.mime;
+        _site_iframe.contentWindow.postMessage(response, '*');
       }
     });
 
