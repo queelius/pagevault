@@ -3479,19 +3479,19 @@ class TestCheckV3:
 
 
 class TestServeCommand:
-    """Tests for pagevault serve command."""
+    """Tests for pagevault dev serve command."""
 
     def test_serve_help(self, runner):
-        """Serve --help should show usage."""
-        result = runner.invoke(main, ["serve", "--help"])
+        """dev serve --help should show usage."""
+        result = runner.invoke(main, ["dev", "serve", "--help"])
         assert result.exit_code == 0
         assert "Serve directory" in result.output
         assert "--port" in result.output
         assert "--open" in result.output
 
     def test_serve_port_option(self, runner):
-        """Serve accepts -P for port."""
-        result = runner.invoke(main, ["serve", "--help"])
+        """dev serve accepts -P for port."""
+        result = runner.invoke(main, ["dev", "serve", "--help"])
         assert "-P" in result.output
 
 

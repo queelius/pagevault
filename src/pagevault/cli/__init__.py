@@ -14,6 +14,7 @@ from pagevault.parser import (
 
 from .commands.audit import audit as _audit
 from .commands.config import config as _config_group
+from .commands.dev import dev as _dev_group
 from .commands.lock import lock as _lock
 from .commands.mark import mark as _mark
 from .commands.sync import sync as _sync
@@ -52,6 +53,7 @@ main.add_command(_unlock, name="unlock")
 main.add_command(_sync, name="sync")
 main.add_command(_audit, name="audit")
 main.add_command(_config_group, name="config")
+main.add_command(_dev_group, name="dev")
 
 
 
@@ -279,55 +281,6 @@ def check(path, password, username):
     else:
         click.echo("Password incorrect")
         raise SystemExit(1)
-
-
-@main.command()
-@click.argument("directory", default=".", type=click.Path(exists=True))
-@click.option(
-    "-P",
-    "--port",
-    default=8765,
-    type=int,
-    help="Port number (default: 8765)",
-)
-@click.option(
-    "-o",
-    "--open",
-    "open_browser",
-    is_flag=True,
-    help="Open browser automatically",
-)
-def serve(directory, port, open_browser):
-    """Serve directory over local HTTP for previewing encrypted files.
-
-    Useful for testing encrypted HTML files that need HTTP (not file://) to work
-    correctly with Web Crypto API and blob URLs.
-
-    \b
-    Examples:
-      pagevault serve                     # Serve current directory on :8765
-      pagevault serve _locked/ -P 9000    # Serve _locked/ on port 9000
-      pagevault serve _locked/ --open     # Serve and open browser
-    """
-    import functools
-    import http.server
-    import webbrowser
-
-    handler = functools.partial(
-        http.server.SimpleHTTPRequestHandler, directory=directory
-    )
-    try:
-        with http.server.HTTPServer(("", port), handler) as httpd:
-            url = f"http://localhost:{port}"
-            click.echo(f"Serving {directory} at {url}")
-            click.echo("Press Ctrl+C to stop.")
-            if open_browser:
-                webbrowser.open(url)
-            httpd.serve_forever()
-    except KeyboardInterrupt:
-        click.echo("\nStopped.")
-    except OSError as e:
-        raise click.ClickException(f"Cannot start server: {e}")
 
 
 if __name__ == "__main__":
