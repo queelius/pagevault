@@ -5,6 +5,7 @@ that can be decrypted and rendered in the browser.
 """
 
 import html
+import json
 import logging
 import mimetypes
 import zipfile
@@ -480,14 +481,12 @@ def _generate_wrap_html_v4(  # noqa: E501
     Returns:
         Complete HTML string.
     """
-    import json as _json
-
     from .config import TemplateConfig
 
     template = config.template if config else TemplateConfig()
 
     # Serialize envelope as JSON for the meta script tag
-    envelope_json = _json.dumps(envelope)
+    envelope_json = json.dumps(envelope)
 
     # Build chunk script tags
     chunk_tags = "\n".join(
