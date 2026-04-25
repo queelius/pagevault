@@ -451,6 +451,41 @@ def _wrap_site_directory(
         raise click.ClickException(str(e))
 
 
+def _find_first_envelope(soup) -> dict | None:
+    """Locate and parse the first v4 envelope JSON in a parsed document.
+
+    Tries the wrap-level ``<script id="pv-meta">`` first, then falls back
+    to the first ``<pagevault data-pv-v4>`` region's ``<script data-pv-meta>``
+    child. Returns the parsed envelope dict or ``None`` when neither is
+    present. Used by the inspect/check CLI paths.
+
+    Raises:
+        click.ClickException: If a meta script exists but its JSON is invalid.
+    """
+    import json
+
+    pv_meta_el = soup.find("script", {"id": "pv-meta"})
+    if pv_meta_el:
+        try:
+            return json.loads(pv_meta_el.string)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise click.ClickException(f"Invalid pv-meta JSON: {e}") from e
+
+    encrypted_el = soup.find("pagevault", attrs={"data-pv-v4": True})
+    if encrypted_el is None:
+        return None
+
+    for child in encrypted_el.find_all("script", recursive=False):
+        if child.has_attr("data-pv-meta") and child.string:
+            try:
+                return json.loads(child.string)
+            except json.JSONDecodeError as e:
+                raise click.ClickException(
+                    f"Invalid region envelope JSON: {e}"
+                ) from e
+    return None
+
+
 def _print_runtime_info(soup) -> None:
     """Print runtime-script/style/viewer/jszip info for the inspect command."""
     runtime_scripts = soup.find_all("script", {"data-pagevault-runtime": True})
@@ -610,8 +645,6 @@ def _verify_password(
     Returns:
         (True, None) on success, (False, error_message) on failure.
     """
-    import json
-
     from pagevault.crypto import verify_password_v4
 
     path = Path(file_path)
@@ -628,31 +661,11 @@ def _verify_password(
 
     soup = _parse_html(content)
 
-    # Check wrap-level v4 envelope first (document-level pv-meta script)
-    pv_meta_el = soup.find("script", {"id": "pv-meta"})
-    envelope = None
-    if pv_meta_el:
-        try:
-            envelope = json.loads(pv_meta_el.string)
-        except (json.JSONDecodeError, TypeError) as e:
-            raise click.ClickException(f"Invalid pv-meta JSON: {e}") from e
-    else:
-        # Fall through to region-level v4: find the first <pagevault data-pv-v4>
-        # and grab its child <script data-pv-meta>.
-        encrypted_el = soup.find("pagevault", attrs={"data-pv-v4": True})
-        if not encrypted_el:
-            raise click.ClickException("No encrypted regions found")
-        meta_script = None
-        for child in encrypted_el.find_all("script", recursive=False):
-            if child.has_attr("data-pv-meta"):
-                meta_script = child
-                break
-        if meta_script is None or not meta_script.string:
-            raise click.ClickException("Missing pv-meta script in region")
-        try:
-            envelope = json.loads(meta_script.string)
-        except json.JSONDecodeError as e:
-            raise click.ClickException(f"Invalid region envelope JSON: {e}") from e
+    # Check wrap-level v4 envelope first (document-level pv-meta script),
+    # then fall back to the first <pagevault data-pv-v4> region.
+    envelope = _find_first_envelope(soup)
+    if envelope is None:
+        raise click.ClickException("No encrypted regions found")
 
     try:
         result = verify_password_v4(envelope, password, username=username)
