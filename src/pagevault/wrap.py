@@ -223,6 +223,8 @@ def wrap_site(
     # viewers are not needed — the site's own HTML/CSS/JS runs inside the
     # sandboxed iframe. Passing viewers=[] produces an empty dispatch table,
     # which is intentional: renderFile is only reached for non-site payloads.
+    # The entry point is read from `meta` by the in-browser site renderer,
+    # so we don't need to pass it through to the HTML template here.
     html = _generate_wrap_html_v4(
         envelope=envelope,
         chunks=chunks,
@@ -230,7 +232,6 @@ def wrap_site(
         config=config,
         users=users,
         include_jszip=True,
-        entry=entry,
     )
 
     if output_path is None:
@@ -457,7 +458,6 @@ def _generate_wrap_html_v4(  # noqa: E501
     config: PagevaultConfig | None = None,
     users: dict[str, str] | None = None,
     include_jszip: bool = False,
-    entry: str | None = None,
 ) -> str:
     """Generate self-contained HTML with v4 chunked encrypted payload.
 
@@ -476,7 +476,6 @@ def _generate_wrap_html_v4(  # noqa: E501
         config: Optional configuration.
         users: Multi-user dict (affects data-mode attribute).
         include_jszip: Whether to include JSZip library for site mode.
-        entry: Entry point for site mode.
 
     Returns:
         Complete HTML string.
