@@ -7,8 +7,8 @@ from pathlib import Path
 import click
 import yaml
 
-from . import __version__
-from .config import (
+from pagevault import __version__
+from pagevault.config import (
     CONFIG_FILENAME,
     create_default_config,
     create_global_config,
@@ -18,8 +18,8 @@ from .config import (
     load_global_config,
     update_config_users,
 )
-from .crypto import PagevaultError
-from .parser import (
+from pagevault.crypto import PagevaultError
+from pagevault.parser import (
     _parse_html,
     has_pagevault_elements,
     mark_body,
@@ -424,7 +424,7 @@ def _wrap_single_file(
     Returns:
         Path to output file
     """
-    from .wrap import wrap_file
+    from pagevault.wrap import wrap_file
 
     # Determine output path
     if output_path:
@@ -468,7 +468,7 @@ def _wrap_site_directory(
     Returns:
         Path to output file
     """
-    from .wrap import wrap_site
+    from pagevault.wrap import wrap_site
 
     # Determine output path
     if output_path:
@@ -815,7 +815,7 @@ def unlock(
 
     # --stdout mode: decrypt and write to stdout
     if to_stdout:
-        from .parser import unlock_html
+        from pagevault.parser import unlock_html
 
         if len(paths) != 1 or not Path(paths[0]).is_file():
             raise click.UsageError("--stdout requires exactly one file")
@@ -1019,7 +1019,7 @@ def info(path):
     if pv_meta_el:
         import json
 
-        from .crypto import inspect_payload_v4
+        from pagevault.crypto import inspect_payload_v4
 
         try:
             envelope = json.loads(pv_meta_el.string)
@@ -1069,7 +1069,7 @@ def info(path):
     # --- v4 region-encrypted format: envelopes inside <pagevault data-pv-v4> ---
     import json
 
-    from .crypto import inspect_payload_v4
+    from pagevault.crypto import inspect_payload_v4
 
     elements = soup.find_all("pagevault")
     encrypted_regions = [el for el in elements if el.has_attr("data-pv-v4")]
@@ -1377,7 +1377,7 @@ def check(path, password, username):
 
     import json
 
-    from .crypto import verify_password_v4
+    from pagevault.crypto import verify_password_v4
 
     # Check wrap-level v4 envelope first (document-level pv-meta script)
     pv_meta_el = soup.find("script", {"id": "pv-meta"})
