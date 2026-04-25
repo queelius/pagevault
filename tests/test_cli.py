@@ -2458,7 +2458,7 @@ class TestVersion:
 
 
 class TestInfoCommand:
-    """Tests for pagevault info command."""
+    """Tests for pagevault inspect command (info mode)."""
 
     @pytest.fixture
     def sample_config(self):
@@ -2485,7 +2485,7 @@ salt: "0123456789abcdef0123456789abcdef"
             ["lock", str(html_path), "-c", str(config_path), "-d", str(locked_dir)],
         )
 
-        result = runner.invoke(main, ["info", str(locked_dir / "index.html")])
+        result = runner.invoke(main, ["inspect", str(locked_dir / "index.html")])
 
         assert result.exit_code == 0
         assert "Encrypted regions: 1" in result.output
@@ -2521,7 +2521,7 @@ users:
             ["lock", str(html_path), "-c", str(config_path), "-d", str(locked_dir)],
         )
 
-        result = runner.invoke(main, ["info", str(locked_dir / "index.html")])
+        result = runner.invoke(main, ["inspect", str(locked_dir / "index.html")])
 
         assert result.exit_code == 0
         assert "Key blobs:    2" in result.output
@@ -2532,7 +2532,7 @@ users:
         html_path = tmp_path / "plain.html"
         html_path.write_text("<html><body>Hello</body></html>")
 
-        result = runner.invoke(main, ["info", str(html_path)])
+        result = runner.invoke(main, ["inspect", str(html_path)])
 
         assert result.exit_code != 0
         assert "no pagevault elements" in result.output.lower()
@@ -2551,7 +2551,7 @@ users:
         )
         assert result.exit_code == 0
 
-        result = runner.invoke(main, ["info", str(out_path)])
+        result = runner.invoke(main, ["inspect", str(out_path)])
 
         assert result.exit_code == 0
         assert "v4 chunked" in result.output
@@ -2560,7 +2560,7 @@ users:
 
 
 class TestCheckCommand:
-    """Tests for pagevault check command."""
+    """Tests for pagevault inspect --check command."""
 
     @pytest.fixture
     def sample_config(self):
@@ -2589,7 +2589,7 @@ salt: "0123456789abcdef0123456789abcdef"
 
         result = runner.invoke(
             main,
-            ["check", str(locked_dir / "index.html"), "-p", "test-password"],
+            ["inspect", str(locked_dir / "index.html"), "-p", "test-password", "--check"],
         )
 
         assert "correct" in result.output.lower()
@@ -2615,7 +2615,7 @@ salt: "0123456789abcdef0123456789abcdef"
 
         result = runner.invoke(
             main,
-            ["check", str(locked_dir / "index.html"), "-p", "wrong-password"],
+            ["inspect", str(locked_dir / "index.html"), "-p", "wrong-password", "--check"],
         )
 
         assert "incorrect" in result.output.lower()
@@ -2647,12 +2647,13 @@ users:
         result = runner.invoke(
             main,
             [
-                "check",
+                "inspect",
                 str(locked_dir / "index.html"),
                 "-p",
                 "pw-alice",
                 "-u",
                 "alice",
+                "--check",
             ],
         )
 
@@ -2666,7 +2667,7 @@ users:
 
         result = runner.invoke(
             main,
-            ["check", str(html_path), "-p", "test"],
+            ["inspect", str(html_path), "-p", "test", "--check"],
         )
 
         assert result.exit_code != 0
@@ -3287,7 +3288,7 @@ class TestWrapFlag:
 
 
 class TestInfoV4:
-    """Tests for info command on v4 wrapped files."""
+    """Tests for inspect command on v4 wrapped files."""
 
     def test_info_v3_shows_chunk_info(self, runner, tmp_path):
         """Info on v4 file shows chunk count and total size."""
@@ -3300,7 +3301,7 @@ class TestInfoV4:
         )
         assert result.exit_code == 0
 
-        result = runner.invoke(main, ["info", str(out_path)])
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "v4 chunked" in result.output
         assert "Chunks:" in result.output
@@ -3316,7 +3317,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(main, ["info", str(out_path)])
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "aes-256-gcm" in result.output
         assert "pbkdf2-sha256" in result.output
@@ -3330,7 +3331,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(main, ["info", str(out_path)])
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Content hash:" in result.output
 
@@ -3342,7 +3343,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(main, ["info", str(out_path)])
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Runtime scripts:" in result.output
         assert "Runtime styles:" in result.output
@@ -3356,7 +3357,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(main, ["info", str(out_path)])
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Version:        v4" in result.output
 
@@ -3368,7 +3369,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(main, ["info", str(out_path)])
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Chunk tags:" in result.output
 
@@ -3382,7 +3383,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(big_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(main, ["info", str(out_path)])
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Chunks:         3" in result.output
         assert "Chunk tags:     3" in result.output
@@ -3412,13 +3413,13 @@ class TestInfoV4:
         )
         assert result.exit_code == 0
 
-        result = runner.invoke(main, ["info", str(out_path)])
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "v4 chunked" in result.output
 
 
 class TestCheckV3:
-    """Tests for check command on v4 wrapped files."""
+    """Tests for inspect --check command on v4 wrapped files."""
 
     def test_check_v3_correct_password(self, runner, tmp_path):
         """Check command works on v4 files with correct password."""
@@ -3428,7 +3429,7 @@ class TestCheckV3:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "my-pw", "-o", str(out_path)])
 
-        result = runner.invoke(main, ["check", str(out_path), "-p", "my-pw"])
+        result = runner.invoke(main, ["inspect", str(out_path), "-p", "my-pw", "--check"])
         assert "correct" in result.output.lower()
         assert result.exit_code == 0
 
@@ -3440,7 +3441,7 @@ class TestCheckV3:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "my-pw", "-o", str(out_path)])
 
-        result = runner.invoke(main, ["check", str(out_path), "-p", "wrong"])
+        result = runner.invoke(main, ["inspect", str(out_path), "-p", "wrong", "--check"])
         assert "incorrect" in result.output.lower()
         assert result.exit_code == 1
 
@@ -3449,7 +3450,7 @@ class TestCheckV3:
         html_path = tmp_path / "plain.html"
         html_path.write_text("<html><body>Hello</body></html>")
 
-        result = runner.invoke(main, ["check", str(html_path), "-p", "test"])
+        result = runner.invoke(main, ["inspect", str(html_path), "-p", "test", "--check"])
         assert result.exit_code != 0
 
     def test_check_v3_site(self, runner, tmp_path):
@@ -3473,7 +3474,7 @@ class TestCheckV3:
             ],
         )
 
-        result = runner.invoke(main, ["check", str(out_path), "-p", "site-pw"])
+        result = runner.invoke(main, ["inspect", str(out_path), "-p", "site-pw", "--check"])
         assert "correct" in result.output.lower()
         assert result.exit_code == 0
 
@@ -3496,10 +3497,10 @@ class TestServeCommand:
 
 
 class TestCheckPrompt:
-    """Tests for check command interactive password prompt."""
+    """Tests for inspect --check interactive password prompt."""
 
     def test_check_prompts_for_password(self, runner, tmp_path):
-        """Check without -p should prompt for password."""
+        """inspect --check without -p should prompt for password."""
         html_path = tmp_path / "index.html"
         html_path.write_text("""<!DOCTYPE html>
 <html><head><title>Test</title></head>
@@ -3520,7 +3521,7 @@ class TestCheckPrompt:
         # Provide password via stdin (no -p flag)
         result = runner.invoke(
             main,
-            ["check", str(locked_dir / "index.html")],
+            ["inspect", str(locked_dir / "index.html"), "--check"],
             input="test-password\n",
         )
         assert "correct" in result.output.lower()
@@ -3567,14 +3568,14 @@ class TestUsersFilter:
         # Verify alice's password works
         check_result = runner.invoke(
             main,
-            ["check", str(locked_dir / "index.html"), "-p", "pw-a", "-u", "alice"],
+            ["inspect", str(locked_dir / "index.html"), "-p", "pw-a", "-u", "alice", "--check"],
         )
         assert "correct" in check_result.output.lower()
 
         # Verify charlie's password does NOT work (was filtered out)
         check_result = runner.invoke(
             main,
-            ["check", str(locked_dir / "index.html"), "-p", "pw-c", "-u", "charlie"],
+            ["inspect", str(locked_dir / "index.html"), "-p", "pw-c", "-u", "charlie", "--check"],
         )
         assert "incorrect" in check_result.output.lower()
 

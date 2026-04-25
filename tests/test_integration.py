@@ -685,15 +685,15 @@ class TestV4WrapIntegration:
         )
         assert result.exit_code == 0, result.output
 
-        # Info
-        result = runner.invoke(main, ["info", str(output)])
+        # Inspect (metadata)
+        result = runner.invoke(main, ["inspect", str(output)])
         assert result.exit_code == 0, result.output
         assert "v4" in result.output
 
-        # Check correct password
-        result = runner.invoke(main, ["check", str(output), "-p", "pw"])
+        # Inspect with correct password check
+        result = runner.invoke(main, ["inspect", str(output), "-p", "pw", "--check"])
         assert "correct" in result.output.lower()
 
-        # Check wrong password
-        result = runner.invoke(main, ["check", str(output), "-p", "wrong"])
+        # Inspect with wrong password check
+        result = runner.invoke(main, ["inspect", str(output), "-p", "wrong", "--check"])
         assert "incorrect" in result.output.lower()
