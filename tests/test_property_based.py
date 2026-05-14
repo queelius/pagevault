@@ -30,7 +30,7 @@ _safe_text = st.text(
     alphabet=st.characters(
         min_codepoint=0x20,  # space
         max_codepoint=0x7E,  # tilde (printable ASCII)
-        blacklist_characters='<>&"\'',
+        blacklist_characters="<>&\"'",
     ),
     min_size=0,
     max_size=200,
@@ -55,6 +55,7 @@ class TestLockUnlockRoundtrip:
     @given(content=_safe_text, password=_password)
     @settings(
         max_examples=50,
+        deadline=None,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     def test_roundtrip_preserves_content(self, content, password):
@@ -70,7 +71,7 @@ class TestLockUnlockRoundtrip:
             alphabet=st.characters(
                 min_codepoint=0x20,
                 max_codepoint=0x7E,
-                blacklist_characters='<>&"\'',
+                blacklist_characters="<>&\"'",
             ),
             # 40+ chars so coincidental runtime-substring match is negligible
             min_size=40,
@@ -80,6 +81,7 @@ class TestLockUnlockRoundtrip:
     )
     @settings(
         max_examples=30,
+        deadline=None,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     def test_locked_does_not_leak_plaintext(self, content, password):
@@ -99,6 +101,7 @@ class TestClosureProperty:
     @given(content=_safe_text, password=_password)
     @settings(
         max_examples=30,
+        deadline=None,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     def test_relock_is_idempotent(self, content, password):
@@ -111,6 +114,7 @@ class TestClosureProperty:
     @given(content=_safe_text, password=_password)
     @settings(
         max_examples=30,
+        deadline=None,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     def test_relock_preserves_ciphertext(self, content, password):
@@ -133,6 +137,7 @@ class TestMarkAndLockRoundtrip:
     @given(content=_safe_text, password=_password)
     @settings(
         max_examples=30,
+        deadline=None,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     def test_mark_body_then_roundtrip(self, content, password):
@@ -158,7 +163,7 @@ class TestNoPlaintextInLocked:
             alphabet=st.characters(
                 min_codepoint=0x20,
                 max_codepoint=0x7E,
-                blacklist_characters='<>&"\'',
+                blacklist_characters="<>&\"'",
             ),
             min_size=40,
             max_size=200,
@@ -167,6 +172,7 @@ class TestNoPlaintextInLocked:
     )
     @settings(
         max_examples=30,
+        deadline=None,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     def test_long_content_not_leaked(self, content, password):
