@@ -1,5 +1,6 @@
 """Shared helpers for pagevault CLI commands."""
 
+import json
 import re
 from pathlib import Path
 
@@ -469,8 +470,6 @@ def _find_first_envelope(soup) -> dict | None:
     Raises:
         click.ClickException: If a meta script exists but its JSON is invalid.
     """
-    import json
-
     # Wrap format: identified by data-pv-chunked on the <pagevault> element
     if soup.find("pagevault", attrs={"data-pv-chunked": True}):
         pv_meta_el = soup.find("script", {"id": "pv-meta"})
@@ -517,8 +516,6 @@ def _print_runtime_info(soup) -> None:
 
 def _print_info(file_path: str) -> None:
     """Print metadata for an encrypted file (used by inspect command)."""
-    import json
-
     from pagevault import __version__
     from pagevault.crypto import inspect_payload_v4
 
@@ -642,16 +639,6 @@ def _print_info(file_path: str) -> None:
         click.echo()
 
     _print_runtime_info(soup)
-
-    # Check for wrap type
-    wrap_el = soup.find("pagevault", {"data-wrap-type": True})
-    if wrap_el:
-        click.echo(f"Wrap type:       {wrap_el.get('data-wrap-type')}")
-        if wrap_el.get("data-filename"):
-            click.echo(f"Filename:        {wrap_el.get('data-filename')}")
-        if wrap_el.get("data-entry"):
-            click.echo(f"Entry point:     {wrap_el.get('data-entry')}")
-
     click.echo(f"pagevault:       v{__version__}")
 
 

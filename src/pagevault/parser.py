@@ -204,21 +204,11 @@ def _read_v4_region(
         PagevaultError: When the meta script JSON is invalid or a chunk
             index attribute is non-numeric.
     """
-    meta_script = None
-    for child in element.find_all("script", recursive=False):
-        if child.has_attr("data-pv-meta"):
-            meta_script = child
-            break
-    if meta_script is None or not meta_script.string:
-        return None
-
-    try:
-        envelope = json.loads(meta_script.string)
-    except json.JSONDecodeError as e:
-        raise PagevaultError(f"Invalid pv-meta JSON: {e}") from e
-
+    meta_script: Tag | None = None
     chunk_tags: list[tuple[int, Tag]] = []
     for child in element.find_all("script", recursive=False):
+        if meta_script is None and child.has_attr("data-pv-meta"):
+            meta_script = child
         if child.has_attr("data-pv-chunk"):
             try:
                 idx = int(child["data-pv-chunk"])
@@ -227,6 +217,15 @@ def _read_v4_region(
                     f"Invalid data-pv-chunk index: {child.get('data-pv-chunk')!r}"
                 ) from e
             chunk_tags.append((idx, child))
+
+    if meta_script is None or not meta_script.string:
+        return None
+
+    try:
+        envelope = json.loads(meta_script.string)
+    except json.JSONDecodeError as e:
+        raise PagevaultError(f"Invalid pv-meta JSON: {e}") from e
+
     chunk_tags.sort(key=lambda t: t[0])
     return meta_script, envelope, chunk_tags
 
