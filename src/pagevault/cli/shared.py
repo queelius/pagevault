@@ -245,9 +245,15 @@ def _resolve_password_and_users(
     elif username and not password:
         raise click.UsageError("-u/--username requires -p/--password")
     elif password and users:
-        # CLI -p flag wins, single-user mode
-        users = None
-        pwd = password
+        # Passing -p alone against a multi-user config would silently drop
+        # every configured user from the resulting file. Require an
+        # explicit decision: -u to add this credential ad-hoc, or rerun
+        # without -p to use the configured users.
+        raise click.UsageError(
+            "-p/--password is ambiguous with a multi-user config. "
+            "Use -u/--username with -p to encrypt for a single ad-hoc "
+            "credential, or omit -p to use the configured users."
+        )
     elif users:
         pwd = None  # Not needed, users dict has passwords
     else:

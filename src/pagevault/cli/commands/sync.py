@@ -22,19 +22,18 @@ from ..shared import _collect_files, _relative_path, _resolve_managed_html_files
     help="Config file path",
 )
 @click.option("--dry-run", is_flag=True, help="Show what would be done without changes")
-@click.option("--rekey", is_flag=True, help="Generate new content encryption key")
-def sync(paths, recursive, config_path, dry_run, rekey):
+def sync(paths, recursive, config_path, dry_run):
     """Re-wrap encryption keys for current users.
 
     Updates encrypted files so that the current set of users in the config
-    can decrypt them. Use after adding or removing users.
+    can decrypt them. Use after adding or removing users. Each synced file
+    receives a fresh CEK and fresh ciphertext.
 
     If no paths are given, uses the 'managed' globs from the config file.
 
     \b
     Examples:
       pagevault sync encrypted/ -r
-      pagevault sync encrypted/ -r --rekey
       pagevault sync -c .pagevault.yaml --dry-run
     """
     # Load configuration
@@ -91,7 +90,6 @@ def sync(paths, recursive, config_path, dry_run, rekey):
                 content,
                 old_users=config.users,  # Use current users to recover CEK
                 new_users=config.users,
-                rekey=rekey,
             )
 
             if result != content:

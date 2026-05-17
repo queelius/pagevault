@@ -469,8 +469,12 @@ class TestMultiUserWorkflow:
         with pytest.raises(PagevaultError):
             unlock_html(synced, "pw-bob", username="bob")
 
-    def test_sync_with_rekey(self):
-        """Test encrypt then sync --rekey, verify content still decryptable."""
+    def test_sync_regenerates_ciphertext(self):
+        """sync_html_keys regenerates ciphertext each call (fresh CEK).
+
+        v4 sync always produces fresh ciphertext; the old `rekey=True`
+        path was a no-op, so the kwarg was removed in v0.4.2.
+        """
         html = """<pagevault>
 <p>Rekeyed content</p>
 </pagevault>"""
@@ -478,12 +482,10 @@ class TestMultiUserWorkflow:
         users = {"alice": "pw-alice", "bob": "pw-bob"}
         encrypted = lock_html(html, users=users)
 
-        # Sync with rekey (generates new CEK)
         synced = sync_html_keys(
             encrypted,
             old_users=users,
             new_users=users,
-            rekey=True,
         )
 
         # Content should still be decryptable by both users

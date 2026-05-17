@@ -472,10 +472,17 @@ def unlock_html(
             if value:
                 element[attr] = value
 
-        # Parse decrypted content and insert
-        # Use list() to avoid iterator invalidation when appending
-        decrypted_soup = BeautifulSoup(decrypted_content, "html.parser")
-        for child in list(decrypted_soup.children):
+        # Parse the decrypted fragment with the same parser strategy as
+        # the outer document, so round-trips don't drift across the
+        # lxml/html.parser boundary (the two disagree on table tbody
+        # insertion, <select> bare text, etc.). lxml wraps fragments in
+        # <html><body>; html.parser doesn't. Extract from <body> when
+        # present, else from the soup root.
+        decrypted_soup = _parse_html(decrypted_content)
+        body = decrypted_soup.find("body")
+        content_root = body if body is not None else decrypted_soup
+        # Use list() to avoid iterator invalidation when appending.
+        for child in list(content_root.children):
             element.append(child)
 
         decrypted_any = True
@@ -494,14 +501,16 @@ def sync_html_keys(
     old_users: dict[str, str] | None = None,
     new_users: dict[str, str] | None = None,
     new_password: str | None = None,
-    rekey: bool = False,
 ) -> str:
     """Re-wrap keys for all encrypted elements in an HTML document.
 
-    Decrypts each v4 envelope using the old credentials, re-encrypts with
-    the new credential set, and replaces the <script data-pv-meta> + chunks
-    in place. When rekey=True, a fresh CEK is generated (chunks re-encrypt).
-    When rekey=False, only the ``keys`` array changes (chunks left as-is).
+    Decrypts each v4 envelope using the old credentials and re-encrypts
+    with the new credential set, replacing the <script data-pv-meta> and
+    chunk scripts in place. A fresh CEK is generated each call, so the
+    envelope's salt, iv_base, and chunks all change.
+
+    True key-only rotation (re-wrap CEK without re-encrypting chunks) is
+    not currently supported; every sync produces fresh ciphertext.
 
     Args:
         html: The HTML document as a string.
@@ -510,7 +519,6 @@ def sync_html_keys(
         old_users: Dict of old {username: password} pairs.
         new_users: New {username: password} dict for re-wrapping.
         new_password: New single password for re-wrapping.
-        rekey: If True, generate new CEK and re-encrypt content.
 
     Returns:
         Modified HTML with re-wrapped keys.
@@ -542,10 +550,10 @@ def sync_html_keys(
         meta_script, envelope, chunk_tags = region
         chunks = [t[1].string or "" for t in chunk_tags]
 
-        # Recover plaintext by decrypting with any old credential.
-        # rewrap_keys can be implemented without decryption for key-only
-        # rotation, but here we stay symmetric: we always decrypt, then
-        # re-encrypt under new credentials (with new salt and CEK iff rekey).
+        # Recover plaintext by decrypting with any old credential, then
+        # re-encrypt under new credentials. A true key-only rotation
+        # (re-wrap CEK without touching chunks) would be faster, but is
+        # not currently implemented; each sync produces fresh ciphertext.
         recovered_pt: bytes | None = None
         recovered_meta: dict | None = None
         if old_users:
@@ -572,11 +580,6 @@ def sync_html_keys(
         if recovered_pt is None:
             raise PagevaultError("Cannot recover CEK: no valid old credentials")
 
-        # Re-encrypt under the new credential set. encrypt_v4 will
-        # produce a fresh CEK either way; setting rekey=False vs True has
-        # no wire-level distinction in v4 (each rewrap gets a fresh CEK),
-        # but we preserve the kwarg for API compatibility.
-        _ = rekey  # Kept for API compatibility; always produces fresh CEK in v4.
         new_envelope, new_chunks = encrypt_v4(
             recovered_pt,
             password=new_password,

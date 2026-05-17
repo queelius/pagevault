@@ -1283,8 +1283,17 @@ users:
         content = (unlocked_dir / "index.html").read_text()
         assert "Alice and Bob's secret" in content
 
-    def test_password_flag_overrides_users(self, runner, tmp_path, sample_users_config):
-        """Test -p flag overrides users config for single-user locking."""
+    def test_password_flag_with_multi_user_config_errors(
+        self, runner, tmp_path, sample_users_config
+    ):
+        """`-p` alone against a multi-user config is rejected as ambiguous.
+
+        Previously `-p` silently dropped every configured user from the
+        resulting file (data-mode != user, only one credential bound). That
+        was surprising and a security footgun, so v0.4.2 raises a UsageError
+        and requires either `-u USERNAME -p PASSWORD` for an ad-hoc single
+        credential, or omitting `-p` to use the configured users.
+        """
         html_path = tmp_path / "index.html"
         html_path.write_text("""<!DOCTYPE html>
 <html>
@@ -1300,9 +1309,7 @@ users:
         config_path.write_text(sample_users_config)
 
         locked_dir = tmp_path / "locked"
-        unlocked_dir = tmp_path / "unlocked"
 
-        # Lock with -p flag (should override users)
         result = runner.invoke(
             main,
             [
@@ -1317,31 +1324,57 @@ users:
             ],
         )
 
-        assert result.exit_code == 0
-        assert "1 file(s) locked" in result.output
+        assert result.exit_code != 0
+        # Combine output across click's stderr/stdout splits
+        combined = (result.output or "") + (getattr(result, "stderr", "") or "")
+        assert "ambiguous" in combined.lower() or "-u" in combined
 
-        content = (locked_dir / "index.html").read_text()
-        # Should NOT have data-mode="user" since -p overrides users
-        assert 'data-mode="user"' not in content
+    def test_username_password_with_multi_user_config_succeeds(
+        self, runner, tmp_path, sample_users_config
+    ):
+        """`-u USER -p PWD` against a multi-user config locks ad-hoc.
 
-        # Should be unlockable with the single password (no username)
+        This is the explicit single-credential path that v0.4.2 routes
+        through (replacing the old silent `-p` override).
+        """
+        html_path = tmp_path / "index.html"
+        html_path.write_text("""<!DOCTYPE html>
+<html>
+<head><title>Test</title></head>
+<body>
+<pagevault>
+<p>Ad-hoc credential</p>
+</pagevault>
+</body>
+</html>""")
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(sample_users_config)
+
+        locked_dir = tmp_path / "locked"
+
         result = runner.invoke(
             main,
             [
-                "unlock",
-                str(locked_dir / "index.html"),
-                "-p",
-                "single-password",
+                "lock",
+                str(html_path),
+                "-c",
+                str(config_path),
                 "-d",
-                str(unlocked_dir),
+                str(locked_dir),
+                "-u",
+                "carol",
+                "-p",
+                "carol-password",
             ],
         )
 
         assert result.exit_code == 0
-        assert "1 file(s) unlocked" in result.output
+        assert "1 file(s) locked" in result.output
 
-        content = (unlocked_dir / "index.html").read_text()
-        assert "Single user override" in content
+        content = (locked_dir / "index.html").read_text()
+        # Ad-hoc -u marks the envelope as user-mode (data-mode="user").
+        assert 'data-mode="user"' in content
 
 
 class TestSyncCommand:

@@ -1125,8 +1125,12 @@ class TestSyncHtmlKeys:
         with pytest.raises(PagevaultError):
             unlock_html(result, "pw-b", username="bob")
 
-    def test_sync_rekey(self):
-        """Test sync with rekey=True produces a new envelope for the same content."""
+    def test_sync_produces_fresh_envelope(self):
+        """sync_html_keys produces a new envelope for the same content.
+
+        v4 sync always rotates the CEK and IVs, so the resulting envelope
+        differs from the original even when the credential set is identical.
+        """
         import json as _json
 
         html = "<pagevault>Rekey secret</pagevault>"
@@ -1141,12 +1145,10 @@ class TestSyncHtmlKeys:
         ).string
         orig_env = _json.loads(orig_meta)
 
-        # Sync with rekey
         result = sync_html_keys(
             encrypted,
             old_users={"alice": "pw-a"},
             new_users={"alice": "pw-a"},
-            rekey=True,
         )
 
         # Envelope should differ (new CEK/IVs) even if password is the same
