@@ -1122,10 +1122,19 @@ class TestRendererXssPrevention:
     """Tests for XSS prevention in renderer JS functions."""
 
     def test_file_renderer_escapes_filename(self):
-        """Test _get_renderer_js_v4() uses escapeHtml for filename display."""
+        """Test _get_renderer_js_v4() renders filenames safely.
+
+        The toolbar/download view use textContent (strictly safer than
+        escapeHtml+innerHTML, since textContent cannot be bypassed by an
+        escape-skipping code path), and the render-error path still uses
+        escapeHtml(msg) for its innerHTML construction.
+        """
         viewers = discover_viewers()
         js = _get_renderer_js_v4(viewers)
-        assert "escapeHtml(fname)" in js
+        # Filename is assigned via textContent rather than escapeHtml+innerHTML.
+        assert "nameSpan.textContent = fname" in js
+        # The render-error path still uses escapeHtml since it builds innerHTML.
+        assert "escapeHtml(msg)" in js
 
     def test_file_renderer_has_escapehtml(self):
         """Test _get_renderer_js() defines escapeHtml."""

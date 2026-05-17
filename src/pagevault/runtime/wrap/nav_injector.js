@@ -13,6 +13,7 @@
       // Fetch shim for local resource requests
       'var __pvFetchId=0,__pvFetchWaiters={};' +
       'window.addEventListener("message",function(e){' +
+      'if(e.source!==window.parent)return;' +
       'if(e.data&&e.data.type==="pagevault-fetch-response"&&__pvFetchWaiters[e.data.id]){' +
       '__pvFetchWaiters[e.data.id](e.data);delete __pvFetchWaiters[e.data.id];}});' +
       'var __pvOrigFetch=window.fetch;' +

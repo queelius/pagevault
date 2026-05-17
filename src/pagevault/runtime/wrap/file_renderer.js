@@ -52,14 +52,20 @@
 
       var blob = new Blob([bytes], { type: meta.mime || 'application/octet-stream' });
 
-      pvEl.setAttribute('data-decrypted', 'true');
-
-      if (meta.type === 'site' && window.__pagevault_renderSite) {
-        window.__pagevault_renderSite(pvEl, bytes, meta);
-      } else {
-        await renderFile(pvEl, blob, meta);
+      try {
+        if (meta.type === 'site' && window.__pagevault_renderSite) {
+          window.__pagevault_renderSite(pvEl, bytes, meta);
+        } else {
+          await renderFile(pvEl, blob, meta);
+        }
+      } catch (err) {
+        if (progressObj) progressObj.remove();
+        var msg = (err && err.message) ? err.message : String(err);
+        pvEl.innerHTML = '<div class="pagevault-error">Render failed: ' + escapeHtml(msg) + '</div>';
+        return { success: false, error: 'Render failed: ' + msg };
       }
 
+      pvEl.setAttribute('data-decrypted', 'true');
       return { success: true };
     });
 
@@ -76,20 +82,41 @@
     function createToolbar(fname, size, downloadUrl) {
       var toolbar = document.createElement('div');
       toolbar.className = 'pagevault-toolbar';
-      toolbar.innerHTML =
-        '<span class="toolbar-filename">' + escapeHtml(fname) + '</span>' +
-        '<span class="toolbar-size">' + formatSize(size) + '</span>' +
-        '<a class="toolbar-btn" href="' + downloadUrl + '" download="' + escapeHtml(fname) + '">Download</a>';
+      var nameSpan = document.createElement('span');
+      nameSpan.className = 'toolbar-filename';
+      nameSpan.textContent = fname;
+      var sizeSpan = document.createElement('span');
+      sizeSpan.className = 'toolbar-size';
+      sizeSpan.textContent = formatSize(size);
+      var dlLink = document.createElement('a');
+      dlLink.className = 'toolbar-btn';
+      dlLink.href = downloadUrl;
+      dlLink.download = fname;
+      dlLink.textContent = 'Download';
+      toolbar.appendChild(nameSpan);
+      toolbar.appendChild(sizeSpan);
+      toolbar.appendChild(dlLink);
       return toolbar;
     }
 
     function renderDownloadView(viewer, url, fname, size) {
-      viewer.innerHTML =
-        '<div class="pagevault-download">' +
-          '<div class="pagevault-icon">\u{1F4C4}</div>' +
-          '<a href="' + url + '" download="' + escapeHtml(fname) + '">Download ' + escapeHtml(fname) + '</a>' +
-          '<div class="file-info">' + formatSize(size) + '</div>' +
-        '</div>';
+      viewer.innerHTML = '';
+      var wrap = document.createElement('div');
+      wrap.className = 'pagevault-download';
+      var icon = document.createElement('div');
+      icon.className = 'pagevault-icon';
+      icon.textContent = '\u{1F4C4}';
+      var link = document.createElement('a');
+      link.href = url;
+      link.download = fname;
+      link.textContent = 'Download ' + fname;
+      var info = document.createElement('div');
+      info.className = 'file-info';
+      info.textContent = formatSize(size);
+      wrap.appendChild(icon);
+      wrap.appendChild(link);
+      wrap.appendChild(info);
+      viewer.appendChild(wrap);
     }
 
     function __pv_resolveViewer(mime) {
