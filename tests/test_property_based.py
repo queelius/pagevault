@@ -16,7 +16,7 @@ whitespace, unicode, HTML entities, various attribute combinations.
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
-from pagevault.parser import lock_html, mark_body, unlock_html
+from pagevault.parser import lock_html, mark_body, mark_elements, unlock_html
 
 # Hypothesis strategies
 
@@ -179,3 +179,38 @@ class TestNoPlaintextInLocked:
         html = _wrap_in_pagevault(content)
         locked = lock_html(html, password=password)
         assert content not in locked
+
+
+class TestMarkElementsIdempotence:
+    """Repeating a selector N times in mark_elements wraps each match once.
+
+    The contract relies on BeautifulSoup's `.select()` re-evaluating
+    against the current DOM after each per-selector wrap. Pinning the
+    property here so a future refactor that batches selects against a
+    snapshot will fail loudly.
+    """
+
+    @given(
+        content=st.text(
+            alphabet=st.characters(
+                min_codepoint=0x61,  # 'a'
+                max_codepoint=0x7A,  # 'z'
+            ),
+            min_size=1,
+            max_size=20,
+        ),
+        repeat=st.integers(min_value=1, max_value=5),
+    )
+    @settings(
+        max_examples=30,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
+    def test_repeated_selector_wraps_once(self, content, repeat):
+        # Single div with the content; we'll target it with the same
+        # selector N times and verify only one wrapper is produced.
+        html = f'<html><body><div id="t">{content}</div></body></html>'
+        result = mark_elements(html, ["#t"] * repeat)
+        # Count occurrences of the opening pagevault tag.
+        assert result.count("<pagevault>") == 1
+        assert result.count("</pagevault>") == 1

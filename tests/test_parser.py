@@ -232,6 +232,69 @@ class TestExtractElementContent:
         assert "<p>nested</p>" in content
 
 
+class TestMarkElementsOverlappingSelectors:
+    """Overlapping selectors must not double-wrap the same element.
+
+    `mark_elements` iterates per selector and skips elements whose parent
+    is already `<pagevault>`. This works for overlapping selectors only
+    because BeautifulSoup's `.select()` re-evaluates against the current
+    DOM (not a cached snapshot): when selector 1 wraps an element,
+    selector 2's call to `.select()` returns the same element with its
+    new `<pagevault>` parent, and the skip guard fires.
+
+    These tests pin that contract down so a future "optimization" that
+    batches selects against the original soup snapshot will fail loudly.
+    """
+
+    def test_duplicate_selector_wraps_once(self):
+        """Two identical selectors wrap the matched element once total."""
+        html = '<html><body><div class="x">content</div></body></html>'
+        result = mark_elements(html, [".x", ".x"])
+        soup = BeautifulSoup(result, "html.parser")
+        # Exactly one pagevault wrapper around the div.
+        wrappers = soup.find_all("pagevault")
+        assert len(wrappers) == 1
+        # And the div is inside it.
+        assert wrappers[0].find("div") is not None
+        # No nested pagevault inside the wrapper.
+        assert wrappers[0].find("pagevault") is None
+
+    def test_overlapping_selectors_wrap_once(self):
+        """A selector matching the same element via different paths wraps once."""
+        html = (
+            '<html><body>'
+            '<div id="a" class="x">content</div>'
+            '</body></html>'
+        )
+        # Both selectors match the same element; only one wrapper expected.
+        result = mark_elements(html, ["#a", ".x", "div"])
+        soup = BeautifulSoup(result, "html.parser")
+        assert len(soup.find_all("pagevault")) == 1
+
+    def test_parent_then_child_selector_does_double_wrap(self):
+        """A parent selector followed by a child selector DOES double-wrap.
+
+        This is the intentional "composable encryption" path: wrapping a
+        parent creates the outer pagevault; matching a child afterward
+        wraps the child too. The result on lock is a nested encryption
+        (the inner pagevault's ciphertext lives inside the outer
+        pagevault's plaintext payload). Pinning this behavior as a
+        feature so it doesn't silently regress.
+        """
+        html = (
+            '<html><body>'
+            '<div id="outer"><span class="inner">x</span></div>'
+            '</body></html>'
+        )
+        # First selector wraps the outer div; the second matches the
+        # inner span (whose parent is the original div, not pagevault).
+        result = mark_elements(html, ["#outer", ".inner"])
+        soup = BeautifulSoup(result, "html.parser")
+        # Two distinct wrappers: outer around the div, inner around the span.
+        wrappers = soup.find_all("pagevault")
+        assert len(wrappers) == 2
+
+
 class TestIsAlreadyEncrypted:
     """Tests for is_already_encrypted function."""
 
