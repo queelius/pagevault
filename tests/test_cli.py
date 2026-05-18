@@ -2599,6 +2599,42 @@ users:
         assert "Chunks:" in result.output
         assert "Total size:" in result.output
 
+    def test_inspect_warns_on_mixed_wrap_and_region(self, runner, tmp_path):
+        """Inspect surfaces region envelopes hidden under wrap precedence.
+
+        A pathological file containing both a wrap (data-pv-chunked)
+        envelope and one or more region (data-pv-v4) envelopes would
+        previously show only the wrap info — region envelopes were
+        silently ignored. Inspect now prints a WARNING listing the
+        region count so the user knows the view is partial.
+        """
+        # Create a real wrap by locking a small file.
+        src = tmp_path / "data.txt"
+        src.write_text("payload")
+        wrapped = tmp_path / "data.html"
+        result = runner.invoke(
+            main, ["lock", str(src), "-p", "pw", "-o", str(wrapped)]
+        )
+        assert result.exit_code == 0
+
+        # Splice a synthetic region envelope into the wrapped file.
+        content = wrapped.read_text(encoding="utf-8")
+        synthetic_region = (
+            '<pagevault data-pv-v4>'
+            '<script data-pv-meta type="x-pv">{"unused":true}</script>'
+            '<script type="x-pv" data-pv-chunk="0">x</script>'
+            "</pagevault>"
+        )
+        # Inject the region right before </body> so the wrap element
+        # remains the document's data-pv-chunked anchor.
+        content = content.replace("</body>", synthetic_region + "</body>")
+        wrapped.write_text(content, encoding="utf-8")
+
+        result = runner.invoke(main, ["inspect", str(wrapped)])
+        assert result.exit_code == 0
+        assert "WARNING" in result.output
+        assert "region envelope" in result.output
+
 
 class TestCheckCommand:
     """Tests for pagevault inspect --check command."""

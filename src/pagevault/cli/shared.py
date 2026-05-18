@@ -556,6 +556,19 @@ def _print_info(file_path: str) -> None:
         info_data = inspect_payload_v4(envelope)
 
         click.echo(f"File: {_relative_path(path)}")
+        # Pathological mixed file: a wrap envelope alongside region
+        # envelopes. Wrap wins precedence (it's the document-level
+        # payload), but the user should know there's more in the file
+        # that this inspect view is not showing.
+        region_count = sum(
+            1 for el in soup.find_all("pagevault") if el.has_attr("data-pv-v4")
+        )
+        if region_count:
+            click.echo(
+                f"WARNING: file also contains {region_count} region "
+                "envelope(s) not shown by this view "
+                "(wrap format takes precedence in inspect)"
+            )
         click.echo("Format:         v4 chunked (wrap)")
         click.echo(f"Version:        v{info_data['version']}")
         click.echo(f"Algorithm:      {info_data['algorithm']}")
