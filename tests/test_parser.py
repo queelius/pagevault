@@ -1434,3 +1434,166 @@ class TestAttributeRemovalDuringLock:
         assert "hint" not in elem.attrs
         assert "title" not in elem.attrs
         assert "remember" not in elem.attrs
+
+
+class TestLockWithoutHtmlRoot:
+    """`lock_html` must not silently produce a runtime-less output.
+
+    If the input HTML has no <html> root, there is no place to inject
+    the runtime, and an encrypted payload with no runtime is unusable
+    in a browser. The function should fail loudly with a clear error
+    rather than emit a broken file.
+    """
+
+    def test_raises_when_no_html_root(self):
+        # Input is a bare fragment that html.parser will accept without
+        # auto-wrapping. (lxml usually auto-wraps fragments, so this
+        # exercises the fallback parser path or an explicitly fragment
+        # soup.)
+        from pagevault.parser import _inject_runtime
+
+        # Directly construct a soup with no <html> to deterministically
+        # exercise the raise path.
+        fragment_soup = BeautifulSoup("<p>just a fragment</p>", "html.parser")
+        assert fragment_soup.find("html") is None
+        with pytest.raises(PagevaultError, match="no <html> root"):
+            _inject_runtime(fragment_soup)
+
+
+class TestRegionPaddingByteLevel:
+    """Region padding uses byte-level pad with meta.size, not lossy rstrip.
+
+    Pre-v0.4.2 behavior: lock called `pad_content()`, which UTF-8 encoded,
+    appended NULs, then re-decoded with `errors="replace"`; unlock then
+    rstripped NULs from the decoded string. This unified two code paths
+    that should be byte-level (the same path wraps already used) under a
+    confusing string-with-lossy-decode shim.
+
+    HTML5 parsing replaces literal NUL bytes with U+FFFD, so in practice
+    the pad_content/rstrip roundtrip was never observed to corrupt real
+    HTML content. The fix removes the lossy shim, brings regions in line
+    with wraps, and stores `meta.size` so unlock can slice precisely.
+    Older envelopes without `meta.size` fall back to the legacy rstrip
+    so files on disk remain decryptable.
+    """
+
+    def test_pad_records_meta_size(self):
+        """A `--pad` lock writes the unpadded byte length to meta.size."""
+        html = (
+            "<html><body><pagevault>"
+            "<p>some content that does not align to power of two</p>"
+            "</pagevault></body></html>"
+        )
+        locked = lock_html(html, password="pw", pad=True)
+        soup = BeautifulSoup(locked, "html.parser")
+        import json as _json
+
+        envelope = _json.loads(
+            soup.find("pagevault").find("script", {"data-pv-meta": True}).string
+        )
+        # meta is encrypted; recover it via decrypt_v4 and assert size.
+        from pagevault.crypto import decrypt_v4
+
+        chunks = [
+            t.string
+            for t in soup.find("pagevault").find_all(
+                "script", {"data-pv-chunk": True}
+            )
+        ]
+        _, meta = decrypt_v4(envelope, chunks, "pw")
+        assert "size" in meta
+        assert meta["size"] == len(
+            "<p>some content that does not align to power of two</p>".encode()
+        )
+
+    def test_unpadded_lock_also_records_meta_size(self):
+        """Even without --pad, meta.size is written (unify with wraps).
+
+        Storing size unconditionally makes the wire format consistent
+        regardless of whether padding was requested. Unlock uses it to
+        slice deterministically.
+        """
+        html = (
+            "<html><body><pagevault>plain content</pagevault></body></html>"
+        )
+        locked = lock_html(html, password="pw")
+        from pagevault.crypto import decrypt_v4
+
+        soup = BeautifulSoup(locked, "html.parser")
+        import json as _json
+
+        envelope = _json.loads(
+            soup.find("pagevault").find("script", {"data-pv-meta": True}).string
+        )
+        chunks = [
+            t.string
+            for t in soup.find("pagevault").find_all(
+                "script", {"data-pv-chunk": True}
+            )
+        ]
+        _, meta = decrypt_v4(envelope, chunks, "pw")
+        assert meta.get("size") == len("plain content".encode())
+
+    def test_byte_level_pad_preserves_trailing_nuls_at_bytes_layer(self):
+        """At the crypto layer (not lock_html), byte-level pad is lossless.
+
+        encrypt_v4/decrypt_v4 work on bytes directly and never go through
+        HTML5 NUL-normalization, so they faithfully roundtrip plaintext
+        ending in NUL bytes when `meta.size` is honored. This exercises
+        the byte-padding contract that lock_html now relies on.
+        """
+        from pagevault.crypto import decrypt_v4, encrypt_v4
+
+        raw = b"payload that ends in nulls\x00\x00"
+        envelope, chunks = encrypt_v4(
+            raw,
+            password="pw",
+            meta={"kind": "raw_bytes", "size": len(raw)},
+        )
+        recovered, meta = decrypt_v4(envelope, chunks, "pw")
+        assert recovered[: meta["size"]] == raw
+
+    def test_old_envelope_without_size_still_decrypts(self):
+        """An envelope created before meta.size existed still decrypts.
+
+        Manually construct a v4 envelope without `size` in the recovered
+        meta block, then unlock through the public surface. The unlock
+        path falls back to `rstrip("\\x00")`, mirroring pre-v0.4.2 files.
+        """
+        import json as _json
+
+        from pagevault.crypto import decrypt_v4, encrypt_v4
+
+        raw_pt = b"<p>legacy content</p>"
+        envelope, chunks = encrypt_v4(
+            raw_pt,
+            password="pw",
+            meta={
+                "kind": "html_fragment",
+                "content_hash": content_hash(raw_pt.decode()),
+                # Deliberately no 'size' field, simulating pre-v0.4.2.
+            },
+        )
+
+        meta_json = _json.dumps(envelope)
+        chunk_tags = "".join(
+            f'<script type="x-pv" data-pv-chunk="{i}">{c}</script>'
+            for i, c in enumerate(chunks)
+        )
+        html = (
+            "<!DOCTYPE html><html><head>"
+            '<style data-pagevault-runtime="true"></style>'
+            '<script data-pagevault-runtime="true"></script>'
+            "</head><body>"
+            "<pagevault data-pv-v4>"
+            f'<script data-pv-meta type="x-pv">{meta_json}</script>'
+            f"{chunk_tags}"
+            "</pagevault></body></html>"
+        )
+
+        # Sanity-check the low-level decrypt sees no `size`.
+        _, meta = decrypt_v4(envelope, chunks, "pw")
+        assert "size" not in meta
+
+        unlocked = unlock_html(html, password="pw")
+        assert "legacy content" in unlocked

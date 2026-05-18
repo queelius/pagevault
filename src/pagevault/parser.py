@@ -18,7 +18,7 @@ from .crypto import (
     content_hash,
     decrypt_v4,
     encrypt_v4,
-    pad_content,
+    pad_content_bytes,
 )
 
 
@@ -75,12 +75,11 @@ def mark_elements(
 
     for selector in selectors:
         for element in soup.select(selector):
-            # Note: We intentionally allow wrapping pagevault elements.
-            # This enables composable encryption - wrapping an already-encrypted
-            # element creates a nested encryption layer (closure property).
-
-            # Skip if already wrapped in a pagevault element
-            # (prevents double-wrapping the same content in one pass)
+            # Skip elements that already live inside a pagevault wrapper.
+            # This prevents double-wrapping children of an already-marked
+            # region in a single pass. We do NOT skip pagevault elements
+            # themselves: wrapping a pagevault with a fresh pagevault is
+            # how nested/composable encryption is requested.
             if element.parent and element.parent.name == "pagevault":
                 continue
 
@@ -303,16 +302,23 @@ def lock_html(
         # Compute content hash before encryption for integrity verification
         hash_value = content_hash(inner_html)
 
-        # Apply content padding if requested (prevents size leakage)
+        # UTF-8 encode and (optionally) pad at the byte level. Padding
+        # at the string level via pad_content() followed by rstrip("\x00")
+        # on unlock would silently eat any legitimately trailing NULs in
+        # the plaintext. Byte-level padding plus storing the original
+        # unpadded size in meta lets unlock slice precisely instead.
+        raw_bytes = inner_html.encode("utf-8")
+        original_size = len(raw_bytes)
         use_pad = pad or (config and config.pad)
-        plaintext = pad_content(inner_html) if use_pad else inner_html
-        plaintext_bytes = plaintext.encode("utf-8")
+        plaintext_bytes = pad_content_bytes(raw_bytes) if use_pad else raw_bytes
 
         # Build region metadata: merge user-supplied meta with required
-        # region fields. content_hash and kind take precedence.
+        # region fields. content_hash and kind take precedence; size is
+        # the unpadded byte length used by unlock to slice off padding.
         region_meta = dict(meta)
         region_meta["kind"] = "html_fragment"
         region_meta["content_hash"] = hash_value
+        region_meta["size"] = original_size
 
         envelope, chunks = encrypt_v4(
             plaintext_bytes,
@@ -439,12 +445,30 @@ def unlock_html(
                 "(expected 'html_fragment')"
             )
 
-        # Decode bytes as UTF-8, rstrip null-byte padding (from --pad)
-        try:
-            decrypted_content = plaintext_bytes.decode("utf-8")
-        except UnicodeDecodeError as e:
-            raise PagevaultError(f"Decrypted content is not valid UTF-8: {e}") from e
-        decrypted_content = decrypted_content.rstrip("\x00")
+        # Slice off padding using the unpadded byte length stored in
+        # meta. Older envelopes (created before meta.size was emitted by
+        # parser.py) fall back to string-level rstrip; that path silently
+        # eats any plaintext that legitimately ended in NULs, but is
+        # required for backward compatibility with files in the wild.
+        original_size = (
+            dec_meta.get("size") if isinstance(dec_meta, dict) else None
+        )
+        if isinstance(original_size, int) and 0 <= original_size <= len(plaintext_bytes):
+            plaintext_bytes = plaintext_bytes[:original_size]
+            try:
+                decrypted_content = plaintext_bytes.decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise PagevaultError(
+                    f"Decrypted content is not valid UTF-8: {e}"
+                ) from e
+        else:
+            try:
+                decrypted_content = plaintext_bytes.decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise PagevaultError(
+                    f"Decrypted content is not valid UTF-8: {e}"
+                ) from e
+            decrypted_content = decrypted_content.rstrip("\x00")
 
         # Verify content_hash if present in metadata
         expected_hash = dec_meta.get("content_hash") if isinstance(dec_meta, dict) else None
@@ -628,8 +652,15 @@ def _inject_runtime(
 
     Returns:
         True if the runtime was injected (style+script appended); False
-        if it was already present or no <html>/<head> exists. Callers
-        use this to decide whether the document was actually mutated.
+        if the runtime is already present. Callers use this to decide
+        whether the document was actually mutated.
+
+    Raises:
+        PagevaultError: When the document has no <html> root and there
+            is therefore no place to inject the runtime. Producing
+            encrypted output without an accompanying runtime would yield
+            a file that can never be unlocked in a browser, so we fail
+            loudly instead.
     """
     head = soup.find("head")
     if not head:
@@ -639,8 +670,12 @@ def _inject_runtime(
             head = soup.new_tag("head")
             html_tag.insert(0, head)
         else:
-            # No html tag either, just return
-            return False
+            raise PagevaultError(
+                "Cannot inject pagevault runtime: input HTML has no <html> "
+                "root tag. Wrap your content as a full document "
+                "(<!DOCTYPE html><html><head></head><body>...</body></html>) "
+                "before locking."
+            )
 
     # Check if already injected
     existing = head.find("script", {"data-pagevault-runtime": True})
