@@ -454,12 +454,37 @@ class TestChunkedEncryption:
         assert chunks1 != chunks2
 
     def test_truncated_chunks_raises(self):
-        """Passing fewer chunks than expected raises error."""
+        """Passing fewer chunks than expected raises a chunk_count mismatch.
+
+        v0.4.2 surfaces the truncation immediately via the envelope's
+        `chunk_count` field rather than waiting for the post-decrypt
+        length check, so the error fires before any GCM authentication
+        work is wasted.
+        """
         data = b"x" * 100
         envelope, chunks = encrypt_v4(data, password="pw", chunk_size=30)
         assert len(chunks) == 4
-        with pytest.raises(PagevaultError, match="length mismatch"):
+        with pytest.raises(PagevaultError, match="chunk_count mismatch"):
             decrypt_v4(envelope, chunks[:2], "pw")
+
+    def test_total_size_zero_with_phantom_chunks_raises(self):
+        """A tampered total_size=0 envelope with extra chunks is rejected.
+
+        Without the chunk_count consistency check, the total_size=0
+        short-circuit returned b"" while silently ignoring any chunks
+        passed in. An attacker could rewrite total_size to 0 and pad the
+        document with arbitrary forged chunk tags; the decrypt would
+        succeed (as empty) and bypass downstream content-hash checks.
+        """
+        # Build a legitimate empty envelope first, then attach phantom
+        # chunks from a different valid encryption.
+        empty_envelope, _ = encrypt_v4(b"", password="pw")
+        _, real_chunks = encrypt_v4(b"some data", password="pw")
+        assert empty_envelope["total_size"] == 0
+        assert empty_envelope["chunk_count"] == 0
+        # Smuggle in chunks the envelope does not acknowledge.
+        with pytest.raises(PagevaultError, match="chunk_count mismatch"):
+            decrypt_v4(empty_envelope, real_chunks, "pw")
 
     def test_chunk_size_zero_raises(self):
         """chunk_size=0 raises PagevaultError."""
