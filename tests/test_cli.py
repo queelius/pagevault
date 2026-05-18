@@ -352,6 +352,95 @@ class TestLock:
         assert result.exit_code == 0
         assert "Writing to _locked/ (use -d to change)" in result.output
 
+    def test_lock_skips_files_under_output_dir(
+        self, runner, tmp_path, sample_html, sample_config
+    ):
+        """Recursive lock skips files that live under the output dir.
+
+        Without this guard, `pagevault lock . -r` with default output
+        would rglob into `_locked/` and re-lock already-locked files
+        in place. The collection step now filters those out and the
+        command prints a skip notice.
+        """
+        # Set up: a top-level file plus a pre-locked file inside _locked/
+        # that should be ignored by the recursive scan.
+        (tmp_path / "page.html").write_text(sample_html)
+
+        locked_dir = tmp_path / "_locked"
+        locked_dir.mkdir()
+        # A file in _locked/ that does NOT contain a pagevault element
+        # so that, if accidentally picked up, the lock step would skip
+        # it without re-encrypting; we still want the collection-level
+        # filter to surface a notice.
+        (locked_dir / "already-locked.html").write_text(
+            "<!DOCTYPE html><html><body>placeholder</body></html>"
+        )
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(sample_config)
+
+        # Run from inside tmp_path so default -d resolves to
+        # `<tmp>/_locked`, which matches our manually-created dir.
+        # We pass the recursive flag and the current directory.
+        original_cwd = Path.cwd()
+        try:
+            import os
+
+            os.chdir(tmp_path)
+            result = runner.invoke(
+                main,
+                [
+                    "lock",
+                    ".",
+                    "-r",
+                    "-c",
+                    str(config_path),
+                    "-d",
+                    str(locked_dir),
+                ],
+            )
+        finally:
+            import os
+
+            os.chdir(original_cwd)
+
+        assert result.exit_code == 0, result.output
+        assert "Skipping 1 file(s) under output directory" in result.output
+        # The top-level page should have been locked normally.
+        assert "1 file(s) locked" in result.output
+
+    def test_lock_errors_when_source_is_under_output_dir(
+        self, runner, tmp_path, sample_html, sample_config
+    ):
+        """Explicitly pointing a source at an output-dir-contained path
+        is unambiguous user error and produces a UsageError. (vs the
+        incidental rglob overlap, which just emits a skip notice.)
+        """
+        locked_dir = tmp_path / "_locked"
+        locked_dir.mkdir()
+        # Source path lives INSIDE the output directory.
+        bad_source = locked_dir / "page.html"
+        bad_source.write_text(sample_html)
+
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(sample_config)
+
+        result = runner.invoke(
+            main,
+            [
+                "lock",
+                str(bad_source),
+                "-c",
+                str(config_path),
+                "-d",
+                str(locked_dir),
+            ],
+        )
+
+        assert result.exit_code != 0
+        combined = (result.output or "") + (getattr(result, "stderr", "") or "")
+        assert "inside the output directory" in combined
+
 
 class TestUnlock:
     """Tests for unlock command."""

@@ -11,6 +11,7 @@ from ..shared import (
     _collect_files,
     _default_output_dir,
     _determine_operation_mode,
+    _exclude_under_output_dir,
     _is_html,
     _lock_html_files,
     _resolve_password_and_users,
@@ -196,6 +197,9 @@ def lock(
     if mode == "lock_html":
         output_base = _default_output_dir(output_dir, "_locked")
         files = _collect_files(tuple(str(p) for p in target_paths), recursive)
+        files = _exclude_under_output_dir(
+            files, output_base, tuple(str(p) for p in target_paths)
+        )
 
         if not files:
             click.echo("No HTML files found")

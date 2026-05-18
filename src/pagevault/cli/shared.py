@@ -70,6 +70,56 @@ def _collect_files(paths: tuple, recursive: bool) -> list[Path]:
     return sorted(set(files))
 
 
+def _exclude_under_output_dir(
+    files: list[Path],
+    output_base: Path,
+    source_paths: tuple,
+) -> list[Path]:
+    """Skip files that live inside the output directory.
+
+    Without this filter, `pagevault lock .` with the default `_locked/`
+    output (or `pagevault lock site/ -d site/_locked`) would rglob into
+    its own output and re-lock already-locked files in place, doubling
+    the encryption.
+
+    Raises:
+        click.UsageError: If any explicit source path IS the output dir
+            or lives under it. That combination is unambiguous user
+            confusion (the inputs and outputs would collide), so we
+            fail fast rather than silently skip everything.
+    """
+    output_resolved = output_base.resolve()
+
+    for source in source_paths:
+        source_resolved = Path(source).resolve()
+        if source_resolved == output_resolved or (
+            output_resolved in source_resolved.parents
+        ):
+            raise click.UsageError(
+                f"Source path '{source}' is inside the output directory "
+                f"'{output_base}'. Choose a different output directory "
+                "with -d/--directory, or move the inputs out of the "
+                "output tree."
+            )
+
+    kept: list[Path] = []
+    skipped: list[Path] = []
+    for f in files:
+        resolved = f.resolve()
+        if resolved == output_resolved or output_resolved in resolved.parents:
+            skipped.append(f)
+        else:
+            kept.append(f)
+
+    if skipped:
+        click.echo(
+            f"Skipping {len(skipped)} file(s) under output directory "
+            f"'{output_base}/' (use -d to write somewhere else)"
+        )
+
+    return kept
+
+
 def _resolve_managed_html_files(
     config_dir: Path, patterns: list[str]
 ) -> list[Path]:
