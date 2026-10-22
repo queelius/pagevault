@@ -25,6 +25,30 @@ const FILES = {
   'secret.txt': 'TOP SECRET PAYROLL DATA',
 };
 
+// Minimal DOMParser stand-in for injectNavScript. These tests exercise the
+// message protocol; where the shim lands in a real document (first in
+// <head>, before page scripts) is covered in Chromium by
+// tests/test_browser_site.py.
+class FakeDOMParser {
+  parseFromString(html) {
+    const head = {
+      nodes: [],
+      firstChild: null,
+      insertBefore(node) { this.nodes.unshift(node); },
+    };
+    return {
+      head,
+      createElement: () => ({ textContent: '' }),
+      documentElement: {
+        get outerHTML() {
+          const scripts = head.nodes.map((n) => `<script>${n.textContent}</script>`);
+          return `<html><head>${scripts.join('')}</head><body>${html}</body></html>`;
+        },
+      },
+    };
+  }
+}
+
 function makeHarness(origin = 'https://owner.example') {
   const listeners = [];
   const posted = [];
@@ -55,6 +79,7 @@ function makeHarness(origin = 'https://owner.example') {
     window,
     location: window.location,
     document: { createElement: () => iframe },
+    DOMParser: FakeDOMParser,
     crypto: globalThis.crypto,
     TextDecoder,
     Uint8Array,

@@ -5,8 +5,12 @@
   // parent frame via postMessage (type: "pagevault-nav"). It also shims
   // fetch() for relative URLs via postMessage (type: "pagevault-fetch").
   //
-  // The script tag is split as '<scr' + 'ipt>' to avoid closing the outer
-  // <script> block in the wrapper HTML.
+  // The shim must run before any of the page's own scripts, or a fetch()
+  // made while the page loads goes to the network and fails. So the page is
+  // parsed with DOMParser (the same HTML parser the iframe uses), the shim
+  // becomes the first child of <head>, and the document is serialized back.
+  // The doctype is written as <!DOCTYPE html>: srcdoc documents are never in
+  // quirks mode, so the original doctype cannot change how the page renders.
   //
   // Every message carries `token`, the per-render secret the parent uses to
   // tell its own srcdoc pages apart from a foreign page that later loads in
@@ -14,8 +18,15 @@
   // into the JS string literal without escaping.
 
   function injectNavScript(html, token) {
-    var tag = '<scr' + 'ipt>' +
-      'var __pvTok="' + token + '";' +
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var shim = doc.createElement('script');
+    shim.textContent = navShimSource(token);
+    doc.head.insertBefore(shim, doc.head.firstChild);
+    return '<!DOCTYPE html>' + doc.documentElement.outerHTML;
+  }
+
+  function navShimSource(token) {
+    return 'var __pvTok="' + token + '";' +
       // Fetch shim for local resource requests
       'var __pvFetchId=0,__pvFetchWaiters={};' +
       'window.addEventListener("message",function(e){' +
@@ -50,9 +61,5 @@
       'a.startsWith("//")||a.startsWith("data:"))return;' +
       'e.preventDefault();' +
       'window.parent.postMessage({type:"pagevault-nav",href:a,token:__pvTok},"*");' +
-      '});' +
-      '</scr' + 'ipt>';
-    var idx = html.lastIndexOf('</body>');
-    if (idx !== -1) return html.slice(0, idx) + tag + html.slice(idx);
-    return html + tag;
+      '});';
   }
