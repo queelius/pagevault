@@ -43,11 +43,21 @@
       }
 
       var meta = result.meta || {};
-      // Strip null-byte padding (from --pad option during lock).
-      // result.bytes is a Uint8Array; size is in meta.size (original unpadded length).
+      // meta is authenticated (it is AES-GCM encrypted under the CEK), but
+      // the envelope's chunk_count/total_size are cleartext. Check the
+      // decrypted bytes against meta so dropped trailing chunks are caught,
+      // then strip --pad null padding by slicing to the unpadded size.
       var bytes = result.bytes;
-      if (meta.size && bytes.length > meta.size) {
+      if (typeof meta.size === 'number') {
+        if (bytes.length < meta.size) {
+          if (progressObj) progressObj.remove();
+          return { success: false, error: 'Integrity check failed: content truncated' };
+        }
         bytes = bytes.slice(0, meta.size);
+      }
+      if (meta.content_hash && await computeHashBytes(bytes) !== meta.content_hash) {
+        if (progressObj) progressObj.remove();
+        return { success: false, error: 'Integrity check failed: content hash mismatch' };
       }
 
       var blob = new Blob([bytes], { type: meta.mime || 'application/octet-stream' });

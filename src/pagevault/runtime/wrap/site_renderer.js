@@ -30,11 +30,36 @@
     var _site_htmlFiles = null;
     var _site_currentPage = null;
     var _site_entry = null;
+    var _site_token = null;
+
+    // Pages we render are srcdoc documents, so they share our origin. But
+    // the iframe's contentWindow survives navigation: if the user follows
+    // an external link inside the site, the foreign page has the same
+    // `e.source` and could ask for every decrypted file. Each render session
+    // therefore embeds a random token into its pages (injectNavScript) and
+    // only messages echoing it are honored. Under file:// our origin is
+    // opaque ("null", which a data: URL can also produce), so the token is
+    // the check there; over http(s) the origin must match as well.
+    var _site_opaqueOrigin = window.location.protocol === 'file:' ||
+      window.location.origin === 'null';
+
+    function newToken() {
+      var bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes, function(b) {
+        return b.toString(16).padStart(2, '0');
+      }).join('');
+    }
+
+    function isFromRenderedPage(e) {
+      if (_site_iframe === null || e.source !== _site_iframe.contentWindow) return false;
+      if (!e.data || e.data.token !== _site_token) return false;
+      return _site_opaqueOrigin || e.origin === window.location.origin;
+    }
 
     // --- Single module-scope message listener (Fix #2) ---
     window.addEventListener('message', function(e) {
-      if (_site_iframe === null || e.source !== _site_iframe.contentWindow) return;
-      if (!e.data || !e.data.type) return;
+      if (!isFromRenderedPage(e) || !e.data.type) return;
       if (e.data.type === 'pagevault-nav') {
         var clean = stripQueryHash(e.data.href);
         if (!clean) return;
@@ -51,12 +76,15 @@
           data: r ? toDataUri(resolved) : null
         };
         if (r) response.mime = r.mime;
-        _site_iframe.contentWindow.postMessage(response, '*');
+        _site_iframe.contentWindow.postMessage(
+          response, _site_opaqueOrigin ? '*' : window.location.origin
+        );
       }
     });
 
     window.__pagevault_renderSite = async function(container, zipBytes, meta) {
       _site_entry = meta.entry || 'index.html';
+      _site_token = newToken();
 
       try {
         var zip = new window.__pagevault_ZipReader(zipBytes.buffer);
@@ -108,7 +136,7 @@
       if (!html) return false;
       _site_currentPage = pageName;
       html = rewriteUrls(html, pageName);
-      html = injectNavScript(html);
+      html = injectNavScript(html, _site_token);
       // Use srcdoc so iframe inherits parent origin — needed for
       // localStorage, blob URLs, etc. under file:// protocol.
       _site_iframe.srcdoc = html;

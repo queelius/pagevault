@@ -47,15 +47,17 @@
     );
   }
 
-  // Content integrity hash used by region decryption to verify
-  // meta.content_hash against the decrypted text. Matches Python's
-  // content_hash(): first 16 bytes of SHA-256(utf-8(content)) as hex.
-  async function computeHash(content) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(content);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  // Content integrity hash checked against the encrypted meta.content_hash.
+  // Matches Python's content_hash_bytes(): first 16 bytes of SHA-256 as hex.
+  async function computeHashBytes(bytes) {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
     const hashArray = new Uint8Array(hashBuffer).slice(0, 16);
     return Array.from(hashArray, b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Text variant used by region decryption (Python's content_hash()).
+  async function computeHash(content) {
+    return computeHashBytes(new TextEncoder().encode(content));
   }
 
   async function decryptV4(envelope, chunks, password, username, onProgress) {

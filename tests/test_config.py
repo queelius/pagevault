@@ -164,6 +164,89 @@ defaults:
         assert config.config_path is None
 
 
+class TestConfigTrust:
+    """Path-bearing keys (viewers_dir executes Python, css_file embeds any
+    file into the output) are honored only from a trusted config: one named
+    explicitly, or one whose directory contains the working directory.
+
+    A config discovered by walking up from an *input path* elsewhere (e.g.
+    ``pagevault lock ~/Downloads/cloned/doc.txt``) still supplies its
+    credentials, but must not get to run code or read arbitrary files.
+    """
+
+    @pytest.fixture
+    def foreign_project(self, tmp_path):
+        """A project dir (not containing cwd) with code-bearing config keys."""
+        project = tmp_path / "cloned"
+        (project / "viewers").mkdir(parents=True)
+        marker = tmp_path / "pwned"
+        (project / "viewers" / "evil.py").write_text(
+            f"open({str(marker)!r}, 'w').write('ran')\n"
+        )
+        (project / "doc.txt").write_text("hello")
+        return project, marker
+
+    @pytest.fixture
+    def elsewhere(self, tmp_path, monkeypatch):
+        cwd = tmp_path / "home"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        return cwd
+
+    @pytest.mark.parametrize(
+        "line", ["viewers_dir: viewers", "css_file: /etc/hostname"]
+    )
+    def test_discovered_outside_cwd_refuses_path_keys(
+        self, foreign_project, elsewhere, line
+    ):
+        project, _ = foreign_project
+        (project / CONFIG_FILENAME).write_text(f'password: "pw"\n{line}\n')
+
+        with pytest.raises(PagevaultError, match="-c"):
+            load_config(start_path=project / "doc.txt")
+
+    def test_discovered_outside_cwd_still_loads_credentials(
+        self, foreign_project, elsewhere
+    ):
+        project, _ = foreign_project
+        (project / CONFIG_FILENAME).write_text('password: "pw"\n')
+
+        config = load_config(start_path=project / "doc.txt")
+        assert config.password == "pw"
+
+    def test_working_inside_project_is_trusted(self, foreign_project, monkeypatch):
+        project, _ = foreign_project
+        (project / CONFIG_FILENAME).write_text('password: "pw"\nviewers_dir: viewers\n')
+        monkeypatch.chdir(project / "viewers")  # any depth below the config dir
+
+        config = load_config(start_path=project / "doc.txt")
+        assert config.viewers_dir == project / "viewers"
+
+    def test_explicit_config_path_is_trusted(self, foreign_project, elsewhere):
+        project, _ = foreign_project
+        (project / CONFIG_FILENAME).write_text('password: "pw"\nviewers_dir: viewers\n')
+
+        config = load_config(config_path=project / CONFIG_FILENAME)
+        assert config.viewers_dir == project / "viewers"
+
+    def test_lock_does_not_execute_foreign_viewer_code(
+        self, foreign_project, elsewhere
+    ):
+        from click.testing import CliRunner
+
+        from pagevault.cli import main
+
+        project, marker = foreign_project
+        (project / CONFIG_FILENAME).write_text('password: "pw"\nviewers_dir: viewers\n')
+
+        result = CliRunner().invoke(
+            main, ["lock", str(project / "doc.txt"), "-o", str(elsewhere / "o.html")]
+        )
+        assert result.exit_code != 0
+        assert "-c" in result.output
+        assert not marker.exists()
+
+
 class TestCreateDefaultConfig:
     """Tests for create_default_config function."""
 

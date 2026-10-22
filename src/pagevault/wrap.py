@@ -64,24 +64,24 @@ def _encrypt_payload(
 ) -> tuple[dict, list[str]]:
     """Hash, optionally pad, then v4-chunk-encrypt raw bytes.
 
-    Returns the envelope (with ``content_hash`` added) and the list of
-    base64-encoded chunk ciphertexts. Shared by :func:`wrap_file` and
-    :func:`wrap_site` — they differ only in how ``data`` and ``meta`` are
-    built.
+    ``content_hash`` and the unpadded ``size`` go into the *encrypted* meta,
+    never the cleartext envelope: a plaintext hash readable without the
+    password would let anyone confirm a guess about the contents. Shared by
+    :func:`wrap_file` and :func:`wrap_site`, which differ only in how
+    ``data`` and ``meta`` are built.
+
+    Returns the envelope and the list of base64-encoded chunk ciphertexts.
     """
-    hash_value = content_hash_bytes(data)
     use_pad = pad or (config and config.pad)
     payload = pad_content_bytes(data) if use_pad else data
 
-    envelope, chunks = encrypt_v4(
+    return encrypt_v4(
         payload,
         password=password,
         salt=config.salt if config else None,
         users=users,
-        meta=meta,
+        meta={**meta, "size": len(data), "content_hash": content_hash_bytes(data)},
     )
-    envelope["content_hash"] = hash_value
-    return envelope, chunks
 
 
 def _write_wrap_output(output_path: Path, html: str) -> None:
@@ -159,6 +159,36 @@ def wrap_file(
     return output_path
 
 
+def default_site_output_path(dir_path: Path) -> Path:
+    """Default output for a wrapped site: ``<dirname>.html`` beside the directory.
+
+    The directory is resolved first so that ``.`` yields ``../<name>.html``
+    rather than a file literally named ``.html``.
+    """
+    dir_path = Path(dir_path).resolve()
+    return dir_path.parent / f"{dir_path.name}.html"
+
+
+def _site_files(dir_path: Path, output_path: Path) -> list[tuple[Path, str]]:
+    """List ``(path, archive_name)`` pairs to bundle from a site directory.
+
+    The bundle is readable by every user the site is encrypted for, so
+    hidden paths (any component starting with ``.``: ``.pagevault.yaml``
+    with its credentials, ``.git/``, ``.env``) are never included, and
+    neither is the output file itself when it lives inside the directory.
+    """
+    output_resolved = output_path.resolve()
+    selected = []
+    for file_path in sorted(dir_path.rglob("*")):
+        rel = file_path.relative_to(dir_path)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        if not file_path.is_file() or file_path.resolve() == output_resolved:
+            continue
+        selected.append((file_path, rel.as_posix()))
+    return selected
+
+
 def wrap_site(
     dir_path: Path,
     password: str | None = None,
@@ -184,21 +214,22 @@ def wrap_site(
     Raises:
         PagevaultError: If directory cannot be read or encryption fails.
     """
-    dir_path = Path(dir_path)
+    dir_path = Path(dir_path).resolve()
     if not dir_path.is_dir():
         raise PagevaultError(f"Directory not found: {dir_path}")
+
+    if output_path is None:
+        output_path = default_site_output_path(dir_path)
+    output_path = Path(output_path)
 
     # Zip the directory
     zip_buffer = BytesIO()
     file_list = []
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(dir_path.rglob("*")):
-            if file_path.is_file():
-                rel = file_path.relative_to(dir_path)
-                rel_str = str(rel).replace("\\", "/")  # Normalize to forward slashes
-                file_list.append(rel_str)
-                zf.write(file_path, rel_str)
+        for file_path, arcname in _site_files(dir_path, output_path):
+            file_list.append(arcname)
+            zf.write(file_path, arcname)
 
     if not file_list:
         raise PagevaultError(f"Directory is empty: {dir_path}")
@@ -235,9 +266,6 @@ def wrap_site(
         include_jszip=True,
     )
 
-    if output_path is None:
-        output_path = dir_path.parent / f"{dir_path.name}.html"
-    output_path = Path(output_path)
     _write_wrap_output(output_path, html)
     return output_path
 

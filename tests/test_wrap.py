@@ -1,5 +1,6 @@
 """Tests for pagevault.wrap module."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ from click.testing import CliRunner
 
 from pagevault.cli import main
 from pagevault.config import CONFIG_FILENAME
-from pagevault.crypto import PagevaultError
+from pagevault.crypto import PagevaultError, content_hash_bytes, decrypt_v4
 from pagevault.viewers import discover_viewers
 from pagevault.wrap import (
     _generate_wrap_html_v4,
@@ -20,6 +21,23 @@ from pagevault.wrap import (
     wrap_file,
     wrap_site,
 )
+
+
+def _read_wrap(output: Path) -> tuple[dict, list[str]]:
+    """Return the cleartext envelope and chunk ciphertexts of a wrap file."""
+    soup = BeautifulSoup(output.read_text(), "html.parser")
+    envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
+    chunks = [
+        soup.find("script", {"id": f"pv-{i}"}).string.strip()
+        for i in range(envelope["chunk_count"])
+    ]
+    return envelope, chunks
+
+
+def _decrypt_wrap(output: Path, password: str) -> tuple[bytes, dict]:
+    """Decrypt a wrap file, returning (padded plaintext, encrypted meta)."""
+    envelope, chunks = _read_wrap(output)
+    return decrypt_v4(envelope, chunks, password)
 
 
 class TestDetectMime:
@@ -159,20 +177,19 @@ class TestWrapFile:
         with pytest.raises(PagevaultError, match="File not found"):
             wrap_file(tmp_path / "nonexistent.txt", password="pw")
 
-    def test_wrap_with_content_hash(self, tmp_path):
-        """Test that content hash is included in v4 envelope."""
-        import json
+    def test_content_hash_not_in_cleartext_envelope(self, tmp_path):
+        """The plaintext hash must not be readable without the password.
 
+        A hash in the cleartext envelope lets anyone confirm a guess about
+        the file's contents (e.g. a known document) offline.
+        """
         test_file = tmp_path / "test.txt"
-        test_file.write_text("Hash test")
+        test_file.write_text("salary: 185000\n")
 
         output = wrap_file(test_file, password="pw")
-        content = output.read_text()
-
-        soup = BeautifulSoup(content, "html.parser")
-        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
-        assert "content_hash" in envelope
-        assert len(envelope["content_hash"]) == 32
+        envelope, _ = _read_wrap(output)
+        assert "content_hash" not in envelope
+        assert content_hash_bytes(b"salary: 185000\n") not in output.read_text()
 
     def test_wrap_multiuser(self, tmp_path):
         """Test wrapping with multi-user encryption."""
@@ -482,6 +499,59 @@ class TestWrapSite:
         _, meta_b = decrypt_v4(envelope, chunks, "pw-b", username="bob")
         assert meta_a["type"] == "site"
         assert meta_b["type"] == "site"
+
+
+class TestWrapSiteFileSelection:
+    """Which files wrap_site bundles. The bundle is readable by every user
+    the site is encrypted for, so it must not sweep in secrets."""
+
+    @staticmethod
+    def _bundled_names(output: Path) -> list[str]:
+        import io
+        import zipfile
+
+        data, meta = _decrypt_wrap(output, "pw")
+        with zipfile.ZipFile(io.BytesIO(data[: meta["size"]])) as zf:
+            return sorted(zf.namelist())
+
+    def test_excludes_dotfiles_and_dot_directories(self, tmp_path):
+        site = tmp_path / "site"
+        (site / ".git").mkdir(parents=True)
+        (site / ".git" / "config").write_text("[remote]")
+        (site / CONFIG_FILENAME).write_text("users:\n  alice: alicepw\n")
+        (site / ".env").write_text("TOKEN=x")
+        (site / "css").mkdir()
+        (site / "css" / "site.css").write_text("body{}")
+        (site / "index.html").write_text("<html>hi</html>")
+
+        output = wrap_site(site, password="pw", output_path=tmp_path / "out.html")
+
+        names = self._bundled_names(output)
+        assert names == ["css/site.css", "index.html"]
+        _, meta = _decrypt_wrap(output, "pw")
+        assert meta["files"] == names
+
+    def test_excludes_its_own_output_inside_the_site(self, tmp_path):
+        site = tmp_path / "site"
+        site.mkdir()
+        (site / "index.html").write_text("<html>hi</html>")
+        out = site / "bundle.html"
+
+        wrap_site(site, password="pw", output_path=out)
+        wrap_site(site, password="pw", output_path=out)  # re-run must not nest
+
+        assert self._bundled_names(out) == ["index.html"]
+
+    def test_dot_directory_gets_a_real_output_name(self, tmp_path, monkeypatch):
+        site = tmp_path / "mysite"
+        site.mkdir()
+        (site / "index.html").write_text("<html>hi</html>")
+        monkeypatch.chdir(site)
+
+        output = wrap_site(Path("."), password="pw")
+
+        assert output.resolve() == tmp_path / "mysite.html"
+        assert "Protected: mysite" in output.read_text()
 
 
 class TestWrapFileCli:
@@ -955,18 +1025,15 @@ class TestWrapFileV3:
         assert data == original_bytes
         assert meta["mime"] == "image/png"
 
-    def test_content_hash_present(self, tmp_path):
-        """v4 envelope includes content_hash."""
-        import json
-
+    @pytest.mark.parametrize("pad", [False, True])
+    def test_content_hash_in_encrypted_meta(self, tmp_path, pad):
+        """content_hash lives in the encrypted meta and hashes the unpadded bytes."""
         test_file = tmp_path / "test.txt"
-        test_file.write_text("Hash me")
+        test_file.write_bytes(b"Hash me")
 
-        output = wrap_file(test_file, password="pw")
-        soup = BeautifulSoup(output.read_text(), "html.parser")
-        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
-        assert "content_hash" in envelope
-        assert len(envelope["content_hash"]) == 32
+        output = wrap_file(test_file, password="pw", pad=pad)
+        _, meta = _decrypt_wrap(output, "pw")
+        assert meta["content_hash"] == content_hash_bytes(b"Hash me")
 
     def test_title_shows_protected(self, tmp_path):
         """HTML title says 'Protected: filename'."""
@@ -1040,19 +1107,17 @@ class TestWrapSiteV3:
         content = output.read_text()
         assert "ZipReader" in content or "JSZip" in content
 
-    def test_site_v4_content_hash_in_envelope(self, tmp_path):
-        """Content hash should be in the v4 envelope, not a data attribute."""
-        import json
-
+    def test_site_v4_content_hash_in_encrypted_meta(self, tmp_path):
+        """Site content hash is encrypted with the meta, never in cleartext."""
         site_dir = tmp_path / "site"
         site_dir.mkdir()
         (site_dir / "index.html").write_text("<html>Test</html>")
 
         output = wrap_site(site_dir, password="pw")
-        soup = BeautifulSoup(output.read_text(), "html.parser")
-        envelope = json.loads(soup.find("script", {"id": "pv-meta"}).string)
-        assert "content_hash" in envelope
-        assert len(envelope["content_hash"]) == 32
+        envelope, _ = _read_wrap(output)
+        assert "content_hash" not in envelope
+        zip_bytes, meta = _decrypt_wrap(output, "pw")
+        assert meta["content_hash"] == content_hash_bytes(zip_bytes[: meta["size"]])
 
     def test_site_v4_multiuser_roundtrip(self, tmp_path):
         """Multi-user site wrap should decrypt for each user."""

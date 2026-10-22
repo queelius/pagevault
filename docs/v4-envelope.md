@@ -174,6 +174,8 @@ must equal `total_size`.
 - AES-GCM per-key IV reuse is catastrophic; each envelope generates a fresh
   random `iv_base`, so envelope-to-envelope IV reuse cannot occur.
 - Metadata confidentiality: `filename`, `mime`, `entry`, `content_hash` are
-  all encrypted. Only the envelope parameters, `chunk_count`, `total_size`,
+  all encrypted. (pagevault ≤ 0.4.2 also wrote a cleartext `content_hash`
+  into wrap envelopes, which allowed offline confirmation of guessed
+  contents; files produced by those versions should be re-locked.) Only the envelope parameters, `chunk_count`, `total_size`,
   and the presence of a wrapping for each user are observable without a
   valid credential.

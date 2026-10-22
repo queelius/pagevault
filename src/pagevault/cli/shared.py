@@ -477,14 +477,9 @@ def _wrap_site_directory(
     Returns:
         Path to output file
     """
-    from pagevault.wrap import wrap_site
+    from pagevault.wrap import default_site_output_path, wrap_site
 
-    # Determine output path
-    if output_path:
-        result_path = output_path
-    else:
-        # Default: place <dirname>.html in parent directory
-        result_path = path.parent / f"{path.name}.html"
+    result_path = output_path or default_site_output_path(path)
 
     if dry_run:
         rel_in = _relative_path(path)
@@ -628,9 +623,6 @@ def _print_info(file_path: str) -> None:
         click.echo(f"Chunk size:     {_format_size(info_data['chunk_size'])}")
         click.echo(f"Chunks:         {info_data['chunk_count']}")
         click.echo(f"Total size:     {_format_size(info_data['total_size'])}")
-
-        if "content_hash" in envelope:
-            click.echo(f"Content hash:   {envelope['content_hash']}")
 
         # Count chunk script tags in a single DOM pass (previously O(N²)
         # via while soup.find). If it disagrees with the envelope, surface

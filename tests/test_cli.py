@@ -3499,8 +3499,8 @@ class TestInfoV4:
         assert "pbkdf2-sha256" in result.output
         assert "310,000" in result.output
 
-    def test_info_v3_shows_content_hash(self, runner, tmp_path):
-        """Info on v4 file shows content hash if present."""
+    def test_info_does_not_reveal_content_hash(self, runner, tmp_path):
+        """inspect runs without a password, so it must not show a plaintext hash."""
         txt_path = tmp_path / "test.txt"
         txt_path.write_text("Hello!")
         out_path = tmp_path / "test.html"
@@ -3511,7 +3511,7 @@ class TestInfoV4:
             main, ["inspect", str(out_path)]
         )
         assert result.exit_code == 0
-        assert "Content hash:" in result.output
+        assert "Content hash:" not in result.output
 
     def test_info_v3_shows_runtime(self, runner, tmp_path):
         """Info on v4 file shows runtime scripts and styles."""
@@ -3690,6 +3690,85 @@ class TestServeCommand:
         """dev serve accepts -P for port."""
         result = runner.invoke(main, ["dev", "serve", "--help"])
         assert "-P" in result.output
+
+    @staticmethod
+    def _record_bind(monkeypatch):
+        """Replace HTTPServer with a fake that records its bind address."""
+        import http.server
+
+        bound = []
+
+        class FakeServer:
+            def __init__(self, address, handler):
+                bound.append(address)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def serve_forever(self):
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr(http.server, "HTTPServer", FakeServer)
+        return bound
+
+    def test_serve_binds_loopback_by_default(self, runner, tmp_path, monkeypatch):
+        """The preview server must not be reachable from the network by default."""
+        bound = self._record_bind(monkeypatch)
+        result = runner.invoke(main, ["dev", "serve", str(tmp_path), "-P", "9999"])
+        assert result.exit_code == 0, result.output
+        assert bound == [("127.0.0.1", 9999)]
+
+    def test_serve_host_option_opts_in_to_wider_binding(
+        self, runner, tmp_path, monkeypatch
+    ):
+        bound = self._record_bind(monkeypatch)
+        result = runner.invoke(
+            main, ["dev", "serve", str(tmp_path), "--host", "0.0.0.0"]
+        )
+        assert result.exit_code == 0, result.output
+        assert bound == [("0.0.0.0", 8765)]
+
+    @pytest.mark.parametrize(
+        "path, status",
+        [
+            ("/index.html", 200),
+            ("/.pagevault.yaml", 404),
+            ("/%2Epagevault.yaml", 404),
+            ("/.git/config", 404),
+            ("/sub/.env", 404),
+        ],
+    )
+    def test_serve_refuses_hidden_paths(self, tmp_path, path, status):
+        """Hidden files (credentials in .pagevault.yaml, .git/) are never served."""
+        import http.client
+        import http.server
+        import threading
+
+        from pagevault.cli.commands.dev import make_handler
+
+        (tmp_path / "index.html").write_text("<html>ok</html>")
+        (tmp_path / CONFIG_FILENAME).write_text("users:\n  alice: alicepw\n")
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "config").write_text("[core]")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / ".env").write_text("TOKEN=x")
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), make_handler(tmp_path))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            conn.request("GET", path)
+            response = conn.getresponse()
+            body = response.read()
+            assert response.status == status
+            assert b"alicepw" not in body
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 class TestCheckPrompt:
