@@ -7,6 +7,7 @@ from pathlib import Path
 import click
 import yaml
 
+from pagevault._fs import atomic_write
 from pagevault.config import (
     find_config_file,
     get_global_config_path,
@@ -15,9 +16,9 @@ from pagevault.crypto import PagevaultError
 from pagevault.parser import (
     _parse_html,
     has_pagevault_elements,
+    lock_html,
     mark_body,
     mark_elements,
-    process_file,
 )
 
 HTML_EXTENSIONS = frozenset({".html", ".htm"})
@@ -353,8 +354,8 @@ def _lock_html_files(
             click.echo(f"Warning: Cannot read {input_path}: {e}", err=True)
             continue
 
-        # Apply wrapping
-        content_was_wrapped = False
+        # Mark (by selector, or the whole body when nothing is marked yet).
+        # The marked plaintext stays in memory: only ciphertext is written.
         if selectors:
             content = mark_elements(
                 content,
@@ -363,16 +364,13 @@ def _lock_html_files(
                 remember=selector_remember,
                 title=selector_title,
             )
-            content_was_wrapped = has_pagevault_elements(content)
         elif not has_pagevault_elements(content):
-            # Default: wrap all body content
             content = mark_body(
                 content,
                 hint=selector_hint,
                 remember=selector_remember,
                 title=selector_title,
             )
-            content_was_wrapped = has_pagevault_elements(content)
 
         # Check for pagevault elements (including newly wrapped ones)
         if not has_pagevault_elements(content):
@@ -388,33 +386,30 @@ def _lock_html_files(
             continue
 
         try:
-            # If content was wrapped (selector or body), the modified
-            # plaintext lives only in `content` — write it to output first
-            # so process_file can read+encrypt from there. Otherwise read
-            # straight from the input path.
-            if content_was_wrapped or selectors:
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(content, encoding="utf-8")
-                source_path = output_path
-            else:
-                source_path = input_path
-            changed = process_file(
-                source_path,
-                output_path,
+            locked = lock_html(
+                content,
                 password=password,
                 config=config,
-                mode="lock",
+                salt=config.salt if config else None,
                 custom_css=custom_css,
                 users=users,
                 pad=pad,
             )
-            if changed:
-                click.echo(f"Locked: {rel_input} -> {rel_output}")
-                processed += 1
-            else:
-                skipped += 1
         except PagevaultError as e:
             click.echo(f"Error processing {rel_input}: {e}", err=True)
+            continue
+
+        if locked == content:
+            skipped += 1
+            continue
+
+        try:
+            atomic_write(output_path, locked)
+        except OSError as e:
+            click.echo(f"Error writing {rel_output}: {e}", err=True)
+            continue
+        click.echo(f"Locked: {rel_input} -> {rel_output}")
+        processed += 1
 
     return processed, skipped
 

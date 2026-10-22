@@ -2,6 +2,7 @@
 
 import click
 
+from pagevault._fs import atomic_write
 from pagevault.parser import has_pagevault_elements, mark_body, mark_elements
 
 from ..shared import _collect_files, _relative_path
@@ -104,7 +105,7 @@ def mark(
 
         # Write in-place
         try:
-            input_path.write_text(modified, encoding="utf-8")
+            atomic_write(input_path, modified)
             click.echo(f"Marked: {rel_path}")
             processed += 1
         except OSError as e:

@@ -53,7 +53,7 @@ viewers:
   markdown: false
 
 # Managed file globs (for sync command)
-managed_globs:
+managed:
   - "_locked/**/*.html"
 ```
 
@@ -197,12 +197,12 @@ Viewer names correspond to the plugin names registered via entry points. Only vi
 
 Because these keys load code or files, they are honored only from a *trusted* config: one passed with `-c`, or one whose directory contains your working directory (you are running pagevault from inside that project). A config found only by searching upward from an input path elsewhere, for example `pagevault lock ~/Downloads/cloned/doc.txt`, still supplies passwords and settings, but if it sets either key pagevault stops with an error instead of running that project's code. Pass `-c path/to/.pagevault.yaml` to trust it explicitly.
 
-#### `managed_globs`
+#### `managed`
 
 File patterns for `sync` command. Useful for automated re-encryption workflows.
 
 ```yaml
-managed_globs:
+managed:
   - "_locked/**/*.html"
   - "public/protected/**/*.html"
 ```

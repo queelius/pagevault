@@ -8,6 +8,7 @@ from click.testing import CliRunner
 
 from pagevault.cli import main
 from pagevault.config import CONFIG_FILENAME
+from pagevault.crypto import PagevaultError
 
 
 @pytest.fixture
@@ -1105,6 +1106,32 @@ defaults:
         assert "Public content" in content
         assert "Secret content" not in content
         assert "data-pv-v4" in content
+
+
+class TestLockLeavesNoPlaintext:
+    """A failed lock must never leave plaintext in the (deployable) output dir.
+
+    Marking (by selector or whole body) produces plaintext that previously
+    went to the output path first, for process_file to read back.
+    """
+
+    @pytest.mark.parametrize("extra", [[], ["-s", "#s"]], ids=["body", "selector"])
+    @pytest.mark.parametrize("failure", [PagevaultError, KeyboardInterrupt])
+    def test_failed_encryption_writes_nothing(
+        self, runner, tmp_path, monkeypatch, extra, failure
+    ):
+        page = tmp_path / "page.html"
+        page.write_text('<html><body><div id="s">TOP SECRET</div></body></html>')
+        out = tmp_path / "out"
+
+        def boom(*args, **kwargs):
+            raise failure("encryption failed")
+
+        monkeypatch.setattr("pagevault.parser.encrypt_v4", boom)
+        runner.invoke(main, ["lock", str(page), "-p", "pw", "-d", str(out), *extra])
+
+        leaked = [f for f in tmp_path.rglob("*") if f.is_file() and f != page]
+        assert leaked == []
 
 
 class TestMark:

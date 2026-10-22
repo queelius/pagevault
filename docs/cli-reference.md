@@ -77,7 +77,7 @@ With `--site`, hidden paths (any file or directory whose name starts with `.`, s
 
 ### unlock
 
-Decrypt encrypted HTML files (restores `<pagevault>` marked state).
+Decrypt encrypted HTML files. Pages with encrypted regions return to `<pagevault>` marked state. A wrapped file (`pagevault lock report.pdf`) is restored as the original file under its original name; a wrapped site (`--site`) is extracted into a directory named after the HTML file (`_unlocked/mysite/` for `mysite.html`).
 
 ```bash
 pagevault unlock [OPTIONS] [PATHS]...
@@ -113,7 +113,7 @@ pagevault unlock report.pdf.html --stdout -p "$SECRET" > report.pdf
 | `--password` | `-p` | Decryption password |
 | `--username` | `-u` | Username for multi-user encrypted content |
 | `--directory` | `-d` | Output directory (default: `_unlocked/`) |
-| `--stdout` | | Output decrypted content to stdout (for piping) |
+| `--stdout` | | Output decrypted content to stdout (for piping): the HTML for a region-locked page, the raw bytes for a wrapped file, the zip archive for a wrapped site |
 | `--config` | `-c` | Path to config file |
 | `--dry-run` | | Preview without changes |
 
@@ -168,7 +168,7 @@ Re-encrypt files after password changes or user updates.
 pagevault sync [OPTIONS] [PATHS]...
 ```
 
-Useful for updating encrypted content when users change or passwords are updated.
+Useful for updating encrypted content when users change or passwords are updated. Applies to region-locked pages and to wrapped files and sites alike: each synced file gets fresh ciphertext under a new key, so a user removed from the config can no longer open it (though anyone who kept an old copy still can).
 
 **Examples:**
 

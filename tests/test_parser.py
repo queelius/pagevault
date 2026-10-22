@@ -556,6 +556,55 @@ class TestUnlockHtml:
         assert 'hint="Remember the hint"' in decrypted
 
 
+def _region_inner(html: str) -> str:
+    """Serialized children of the single <pagevault> element in `html`."""
+    return BeautifulSoup(html, "lxml").find("pagevault").decode_contents()
+
+
+class TestRegionRoundTripFidelity:
+    """lock then unlock must reproduce the region's markup exactly.
+
+    The plaintext inside the envelope is what the browser assigns to
+    innerHTML, so serialization bugs on the lock side are not cosmetic:
+    escaped text that comes back as markup is live HTML in the viewer.
+    """
+
+    @pytest.mark.parametrize(
+        "inner",
+        [
+            # Escaped text must stay text (otherwise it becomes markup).
+            "a &lt;img src=x onerror=alert(1)&gt; b",
+            "<pre><code>&lt;script&gt;x &amp;&amp; y&lt;/script&gt;</code></pre>",
+            # Comments keep their delimiters.
+            "<!-- note --><p>x</p>",
+            # Head-only elements at the start of the fragment stay put.
+            "<style>.a{color:red}</style><p>x</p>",
+            '<meta content="b" name="a"/><script>var x = 1</script><p>x</p>',
+            '<link href="s.css" rel="stylesheet"/><p>x</p>',
+            # Leading text and table structure.
+            " lead <p>x</p>",
+            "<table><tbody><tr><td>a</td></tr></tbody></table>",
+        ],
+    )
+    def test_roundtrip_is_exact(self, inner):
+        html = f"<html><head></head><body><pagevault>{inner}</pagevault></body></html>"
+        expected = _region_inner(html)
+
+        result = unlock_html(lock_html(html, "pw"), "pw")
+
+        assert _region_inner(result) == expected
+
+    def test_locked_plaintext_keeps_entities(self):
+        """The fragment the browser receives is the escaped serialization."""
+        html = "<pagevault>1 &lt; 2 &amp; <!-- c --></pagevault>"
+        soup = BeautifulSoup(html, "html.parser")
+
+        assert (
+            extract_element_content(soup.find("pagevault"))
+            == "1 &lt; 2 &amp; <!-- c -->"
+        )
+
+
 class TestMultipleElements:
     """Tests for multiple pagevault elements."""
 

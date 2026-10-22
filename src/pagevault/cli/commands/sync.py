@@ -4,9 +4,11 @@ from pathlib import Path
 
 import click
 
+from pagevault._fs import atomic_write
 from pagevault.config import load_config
 from pagevault.crypto import PagevaultError
 from pagevault.parser import has_pagevault_elements, sync_html_keys
+from pagevault.wrap import WrapDocument
 
 from ..shared import _collect_files, _relative_path, _resolve_managed_html_files
 
@@ -86,14 +88,18 @@ def sync(paths, recursive, config_path, dry_run):
             continue
 
         try:
-            result = sync_html_keys(
-                content,
-                old_users=config.users,  # Use current users to recover CEK
-                new_users=config.users,
-            )
+            # Current users recover the content; removed users lose access
+            # because the content is re-encrypted under a fresh CEK.
+            doc = WrapDocument.parse(content)
+            if doc is not None:
+                result = doc.rekey(old_users=config.users, new_users=config.users)
+            else:
+                result = sync_html_keys(
+                    content, old_users=config.users, new_users=config.users
+                )
 
             if result != content:
-                input_path.write_text(result, encoding="utf-8")
+                atomic_write(input_path, result)
                 click.echo(f"Synced: {rel_path}")
                 processed += 1
             else:
