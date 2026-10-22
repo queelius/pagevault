@@ -3,7 +3,8 @@
 This document specifies the v4 encrypted envelope format used by pagevault
 starting with version 0.4.0. v4 unifies the formerly separate v2
 (attribute-embedded) and v3 (chunked, file/site) formats into a single
-chunked envelope with a `meta.kind` discriminator for region / file / site.
+chunked envelope whose encrypted metadata says what the plaintext is
+(region, file or site).
 
 **Breaking change from v0.3.x:** v0.3.x encrypted files (v2 regions and v3
 wraps) cannot be decrypted by v0.4.0. Users must re-lock.
@@ -77,44 +78,60 @@ producing one `{iv, ct}` entry in `keys`.
 
 ## Encrypted metadata JSON
 
-Encrypted separately (`meta_iv`, `meta_ct`), the metadata is a JSON object:
+Encrypted separately (`meta_iv`, `meta_ct`), the metadata is a JSON object.
+Being inside the AEAD, it is authenticated: unlike the cleartext envelope
+fields (`chunk_count`, `total_size`), it cannot be altered without the key.
+Regions and wraps currently name their discriminator differently:
 
 ```json
-{
-  "kind": "html_fragment" | "file" | "site",
-  "filename": "report.pdf",
-  "mime": "application/pdf",
-  "entry": "index.html",
-  "content_hash": "<hex, 16 bytes>",
-  "encrypted_at": "2026-04-24T00:00:00Z",
-  "version": "0.4.0"
-}
+{"kind": "html_fragment", "size": 1234, "content_hash": "<hex>",
+ "encrypted_at": "2026-04-24T00:00:00+00:00", "version": "0.4.2"}
+
+{"type": "file", "filename": "report.pdf", "mime": "application/pdf",
+ "size": 52311, "content_hash": "<hex>"}
+
+{"type": "site", "entry": "index.html", "files": ["index.html", "css/a.css"],
+ "size": 80412, "content_hash": "<hex>"}
 ```
 
-### Kind discriminator
+### Discriminator
 
-- `html_fragment`: Encrypted region inside a page. Plaintext is HTML text.
-- `file`: Single wrapped file. Plaintext is the raw file bytes.
-- `site`: Directory bundled as a zip. Plaintext is a zip archive.
+- `kind: "html_fragment"`: Encrypted region inside a page. Plaintext is
+  UTF-8 HTML, the region's serialized children.
+- `type: "file"`: Single wrapped file. Plaintext is the raw file bytes.
+- `type: "site"`: Directory bundled as a zip. Plaintext is a zip archive.
 
-### Fields by kind
+### Fields
 
-| Field          | html_fragment | file   | site   |
-|----------------|---------------|--------|--------|
-| `kind`         | required      | required | required |
-| `filename`     | -             | required | -      |
-| `mime`         | -             | required | -      |
-| `entry`        | -             | -      | required |
-| `content_hash` | optional      | optional | optional |
-| `encrypted_at` | optional      | optional | optional |
-| `version`      | optional      | optional | optional |
+| Field          | region   | file     | site     |
+|----------------|----------|----------|----------|
+| `kind`         | required | -        | -        |
+| `type`         | -        | required | required |
+| `size`         | written  | written  | written  |
+| `content_hash` | written  | written  | written  |
+| `filename`     | -        | required | -        |
+| `mime`         | -        | required | -        |
+| `entry`        | -        | -        | required |
+| `files`        | -        | -        | written  |
+| `encrypted_at` | written  | -        | -        |
+| `version`      | written  | -        | -        |
 
-`content_hash` is the first 16 bytes of `SHA-256(plaintext)`, hex-encoded.
-When present, decryptors verify it matches the decrypted bytes.
+"written" means current pagevault always emits the field but decryptors
+accept its absence (files from older versions).
+
+`size` is the byte length of the plaintext before padding. Decryptors drop
+everything after it, and reject plaintext shorter than it as truncated.
+
+`content_hash` is the first 16 bytes of `SHA-256(plaintext)` (unpadded),
+hex-encoded. When present, decryptors verify it matches the decrypted bytes.
+
+`filename` and `entry` come from whoever made the file. A decryptor that
+writes to disk reduces `filename` to a bare name and refuses site entries
+that would land outside its destination directory.
 
 ## HTML Serialization
 
-### Regions (`kind = "html_fragment"`)
+### Regions (`kind: "html_fragment"`)
 
 ```html
 <pagevault data-pv-v4>
@@ -132,7 +149,7 @@ Attributes on `<pagevault>`:
 - `data-hint`, `data-title`, `data-remember`: Preserved from `hint`, `title`,
   `remember` attributes on the pre-lock element.
 
-### Files (`kind = "file"`) and Sites (`kind = "site"`)
+### Files (`type: "file"`) and Sites (`type: "site"`)
 
 Wrap outputs continue to use the document-level script layout introduced in
 v3, with the version field bumped to 4:
@@ -142,11 +159,13 @@ v3, with the version field bumped to 4:
 <script id="pv-0" type="x-pv">{base64 chunk 0}</script>
 <script id="pv-1" type="x-pv">{base64 chunk 1}</script>
 <!-- ... -->
-<pagevault data-pv-v4></pagevault>
+<pagevault data-pv-chunked="true"></pagevault>
 ```
 
-The (empty) `<pagevault>` element acts as the render target. The wrap
-runtime reads `<script id="pv-meta">` and `<script id="pv-N">` directly.
+The (empty) `<pagevault>` element acts as the render target and carries
+`data-mode="user"` in multi-user mode. Readers (the wrap runtime, and
+`pagevault.wrap.WrapDocument` in Python) read `<script id="pv-meta">` and
+`<script id="pv-N">` for `N < chunk_count` directly.
 
 ## Chunking and IV derivation
 
