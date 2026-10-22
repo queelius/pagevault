@@ -198,7 +198,10 @@ class TestDecryptSite:
         assert (dest / "index.html").read_text() == "<h1>home</h1>"
         assert (dest / "sub" / "a.css").read_text() == "p{}"
 
-    @pytest.mark.parametrize("member", ["../escape.txt", "/abs.txt", "a/../../b.txt"])
+    @pytest.mark.parametrize(
+        "member",
+        ["../escape.txt", "/abs.txt", "a/../../b.txt", "a\\..\\..\\b.txt", "C:/x.txt"],
+    )
     def test_refuses_members_outside_destination(self, tmp_path, member):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:

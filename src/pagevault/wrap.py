@@ -323,20 +323,31 @@ class WrappedPayload:
         except zipfile.BadZipFile as e:
             raise PagevaultError(f"Site payload is not a valid zip: {e}") from e
 
+        root = dest.resolve()
         with archive:
-            members = [m for m in archive.infolist() if not m.is_dir()]
-            for member in members:
+            # Resolve and check every target before writing any. Both slash
+            # styles separate parts, and drive-qualified parts ("C:") are
+            # refused because joining one onto dest discards dest on Windows.
+            targets = []
+            for member in archive.infolist():
+                if member.is_dir():
+                    continue
                 parts = PurePosixPath(member.filename.replace("\\", "/")).parts
-                if not parts or parts[0] == "/" or ".." in parts:
+                target = root.joinpath(*parts).resolve() if parts else root
+                if (
+                    not parts
+                    or parts[0] == "/"
+                    or any(part == ".." or ":" in part for part in parts)
+                    or not target.is_relative_to(root)
+                    or target == root
+                ):
                     raise PagevaultError(
                         f"Site entry would extract outside {dest}: {member.filename!r}"
                     )
-            written = []
-            for member in members:
-                target = dest.joinpath(*PurePosixPath(member.filename).parts)
+                targets.append((member, target))
+            for member, target in targets:
                 atomic_write(target, archive.read(member))
-                written.append(target)
-        return written
+        return [target for _, target in targets]
 
 
 @dataclass
