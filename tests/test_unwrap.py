@@ -362,6 +362,7 @@ class TestUnlockCli:
             main, ["unlock", str(tmp_path / "a.txt.html"), "-p", "bad", "-d", str(out)]
         )
 
+        assert result.exit_code == 1
         assert "Error processing" in result.output
         assert "0 file(s) unlocked" in result.output
         assert not out.exists()

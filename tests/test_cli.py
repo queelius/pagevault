@@ -3966,3 +3966,70 @@ class TestConfigSetFormatting:
         )
         # Should not have Python-style "True"
         assert "'True'" not in result.output
+
+
+class TestBatchFailures:
+    """A batch keeps going past a bad file, but the exit status reports it."""
+
+    @pytest.fixture
+    def pages(self, tmp_path):
+        d = tmp_path / "pages"
+        d.mkdir()
+        (d / "a.html").write_text("<html><body><p>alpha</p></body></html>")
+        (d / "bad.html").write_bytes(b"<html><body>\xff\xfe not utf-8</body></html>")
+        (d / "c.html").write_text("<html><body><p>gamma</p></body></html>")
+        return d
+
+    def test_lock_continues_past_unreadable_file_and_exits_nonzero(
+        self, runner, tmp_path, pages
+    ):
+        out = tmp_path / "out"
+
+        result = runner.invoke(main, ["lock", str(pages), "-p", "pw", "-d", str(out)])
+
+        assert result.exit_code == 1
+        assert "bad.html" in result.output
+        assert "2 file(s) locked, 0 skipped, 1 failed" in result.output
+        assert sorted(p.name for p in out.iterdir()) == ["a.html", "c.html"]
+
+    def test_unlock_wrong_password_exits_nonzero(self, runner, tmp_path, pages):
+        locked = tmp_path / "locked"
+        runner.invoke(
+            main, ["lock", str(pages / "a.html"), "-p", "pw", "-d", str(locked)]
+        )
+
+        result = runner.invoke(
+            main, ["unlock", str(locked), "-p", "wrong", "-d", str(tmp_path / "u")]
+        )
+
+        assert result.exit_code == 1
+        assert "0 file(s) unlocked, 0 skipped, 1 failed" in result.output
+
+    def test_unlock_unreadable_file_counts_as_failure(self, runner, tmp_path, pages):
+        result = runner.invoke(
+            main,
+            ["unlock", str(pages / "bad.html"), "-p", "pw", "-d", str(tmp_path / "u")],
+        )
+
+        assert result.exit_code == 1
+        assert "1 failed" in result.output
+
+    def test_sync_unreadable_file_counts_as_failure(self, runner, tmp_path, pages):
+        cfg = tmp_path / CONFIG_FILENAME
+        cfg.write_text("users:\n  alice: pw-a\n")
+
+        result = runner.invoke(main, ["sync", str(pages / "bad.html"), "-c", str(cfg)])
+
+        assert result.exit_code == 1
+        assert "0 file(s) synced, 0 skipped, 1 failed" in result.output
+
+    def test_clean_batch_still_exits_zero(self, runner, tmp_path, pages):
+        (pages / "bad.html").unlink()
+
+        result = runner.invoke(
+            main, ["lock", str(pages), "-p", "pw", "-d", str(tmp_path / "out")]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "2 file(s) locked, 0 skipped" in result.output
+        assert "failed" not in result.output

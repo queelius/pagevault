@@ -419,7 +419,7 @@ pagevault lock mysite/ --site -p "share-password" -o mysite-locked.html
 ## Exit Codes
 
 - `0`: Success
-- `1`: General error (invalid arguments, file not found, etc.)
+- `1`: General error (invalid arguments, file not found, etc.), or at least one file in a `lock`, `unlock` or `sync` batch failed. The batch still processes every other file; the summary line ends with `, N failed`.
 - `2`: Configuration error (missing password, invalid config file)
 
 ---

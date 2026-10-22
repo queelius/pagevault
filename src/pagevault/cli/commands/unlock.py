@@ -11,9 +11,11 @@ from pagevault.parser import has_pagevault_elements, process_file, unlock_html
 from pagevault.wrap import WrapDocument, WrapKind
 
 from ..shared import (
+    BatchTally,
     _collect_files,
     _default_output_dir,
     _get_output_path,
+    _read_html,
     _relative_path,
 )
 
@@ -166,22 +168,16 @@ def unlock(
         click.echo("No HTML files found")
         return
 
-    # Process files
-    processed = 0
-    skipped = 0
+    tally = BatchTally()
 
     for input_path in files:
         output_path = _get_output_path(input_path, paths, output_base)
-
-        # Quick check for pagevault elements
-        try:
-            content = input_path.read_text(encoding="utf-8")
-        except OSError as e:
-            click.echo(f"Warning: Cannot read {input_path}: {e}", err=True)
+        content = _read_html(input_path, tally)
+        if content is None:
             continue
 
         if not has_pagevault_elements(content):
-            skipped += 1
+            tally.skipped += 1
             continue
 
         rel_input = _relative_path(input_path)
@@ -193,15 +189,15 @@ def unlock(
                 dest = _unlock_wrapped(doc, output_path, pwd, user, dry_run)
                 verb = "Would unlock" if dry_run else "Unlocked"
                 click.echo(f"{verb}: {rel_input} -> {_relative_path(dest)}")
-                processed += 1
+                tally.done += 1
                 continue
-        except PagevaultError as e:
-            click.echo(f"Error processing {rel_input}: {e}", err=True)
+        except (PagevaultError, OSError) as e:
+            tally.fail(f"Error processing {rel_input}: {e}")
             continue
 
         if dry_run:
             click.echo(f"Would unlock: {rel_input} -> {rel_output}")
-            processed += 1
+            tally.done += 1
             continue
 
         try:
@@ -215,10 +211,10 @@ def unlock(
             )
             if changed:
                 click.echo(f"Unlocked: {rel_input} -> {rel_output}")
-                processed += 1
+                tally.done += 1
             else:
-                skipped += 1
+                tally.skipped += 1
         except PagevaultError as e:
-            click.echo(f"Error processing {rel_input}: {e}", err=True)
+            tally.fail(f"Error processing {rel_input}: {e}")
 
-    click.echo(f"\n{processed} file(s) unlocked, {skipped} skipped")
+    tally.finish("unlocked")

@@ -205,7 +205,7 @@ def lock(
             click.echo("No HTML files found")
             return
 
-        processed, skipped = _lock_html_files(
+        tally = _lock_html_files(
             files,
             config,
             users,
@@ -221,7 +221,7 @@ def lock(
             pad=effective_pad,
         )
 
-        click.echo(f"\n{processed} file(s) locked, {skipped} skipped")
+        tally.finish("locked")
 
     elif mode == "wrap_file":
         # File wrapping (non-HTML, or HTML with --wrap)

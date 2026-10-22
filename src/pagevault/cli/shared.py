@@ -2,6 +2,7 @@
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -45,6 +46,40 @@ def _relative_path(path: Path) -> str:
         return str(path.relative_to(Path.cwd()))
     except ValueError:
         return str(path)
+
+
+@dataclass
+class BatchTally:
+    """Per-file outcomes of a batch command (lock, unlock, sync).
+
+    A batch carries on past a file that fails, but :meth:`finish` makes the
+    command exit 1 if any did, so scripts and CI notice.
+    """
+
+    done: int = 0
+    skipped: int = 0
+    failed: int = 0
+
+    def fail(self, message: str) -> None:
+        click.echo(message, err=True)
+        self.failed += 1
+
+    def finish(self, verb: str) -> None:
+        summary = f"\n{self.done} file(s) {verb}, {self.skipped} skipped"
+        if self.failed:
+            summary += f", {self.failed} failed"
+        click.echo(summary)
+        if self.failed:
+            raise click.exceptions.Exit(1)
+
+
+def _read_html(path: Path, tally: BatchTally) -> str | None:
+    """Read an input file as UTF-8, recording a failure if that's impossible."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        tally.fail(f"Error reading {_relative_path(path)}: {e}")
+        return None
 
 
 def _collect_files(paths: tuple, recursive: bool) -> list[Path]:
@@ -329,8 +364,8 @@ def _lock_html_files(
     selector_title: str | None,
     source_paths: tuple,
     pad: bool = False,
-) -> tuple[int, int]:
-    """Lock HTML files. Returns (processed, skipped)."""
+) -> BatchTally:
+    """Lock HTML files, returning the per-file outcomes."""
 
     # Load custom CSS if provided
     custom_css = None
@@ -340,18 +375,12 @@ def _lock_html_files(
         except OSError as e:
             raise click.ClickException(f"Cannot read CSS file: {e}")
 
-    processed = 0
-    skipped = 0
+    tally = BatchTally()
 
     for input_path in files:
-        # Determine output path
         output_path = _get_output_path(input_path, source_paths, output_base)
-
-        # Read file content
-        try:
-            content = input_path.read_text(encoding="utf-8")
-        except OSError as e:
-            click.echo(f"Warning: Cannot read {input_path}: {e}", err=True)
+        content = _read_html(input_path, tally)
+        if content is None:
             continue
 
         # Mark (by selector, or the whole body when nothing is marked yet).
@@ -374,7 +403,7 @@ def _lock_html_files(
 
         # Check for pagevault elements (including newly wrapped ones)
         if not has_pagevault_elements(content):
-            skipped += 1
+            tally.skipped += 1
             continue
 
         rel_input = _relative_path(input_path)
@@ -382,7 +411,7 @@ def _lock_html_files(
 
         if dry_run:
             click.echo(f"Would lock: {rel_input} -> {rel_output}")
-            processed += 1
+            tally.done += 1
             continue
 
         try:
@@ -396,22 +425,22 @@ def _lock_html_files(
                 pad=pad,
             )
         except PagevaultError as e:
-            click.echo(f"Error processing {rel_input}: {e}", err=True)
+            tally.fail(f"Error processing {rel_input}: {e}")
             continue
 
         if locked == content:
-            skipped += 1
+            tally.skipped += 1
             continue
 
         try:
             atomic_write(output_path, locked)
         except OSError as e:
-            click.echo(f"Error writing {rel_output}: {e}", err=True)
+            tally.fail(f"Error writing {rel_output}: {e}")
             continue
         click.echo(f"Locked: {rel_input} -> {rel_output}")
-        processed += 1
+        tally.done += 1
 
-    return processed, skipped
+    return tally
 
 
 def _wrap_single_file(
