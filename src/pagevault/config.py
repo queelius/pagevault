@@ -198,9 +198,19 @@ def _is_trusted_location(config_path: Path) -> bool:
     config, as with make or npm scripts. A config found only by walking up
     from an input path somewhere else is not.
     """
-    config_dir = config_path.resolve().parent
+    config_dir = _config_dir(config_path)
     cwd = Path.cwd().resolve()
     return cwd == config_dir or config_dir in cwd.parents
+
+
+def _config_dir(config_path: Path) -> Path:
+    """The directory a config's trust and relative paths are judged from.
+
+    Symlinks are resolved, and both the trust check and the path-bearing
+    keys use this one directory: a symlinked config is trusted (or not) for
+    where it really lives, so its relative paths must resolve there too.
+    """
+    return Path(config_path).resolve().parent
 
 
 def load_config(
@@ -392,7 +402,7 @@ def _load_config_file(config_path: Path, trusted: bool = True) -> PagevaultConfi
         viewers_dir_path = Path(data["viewers_dir"])
         # Resolve relative paths against config file directory
         if not viewers_dir_path.is_absolute():
-            viewers_dir_path = config_path.parent / viewers_dir_path
+            viewers_dir_path = _config_dir(config_path) / viewers_dir_path
         config.viewers_dir = viewers_dir_path
 
     # Load custom CSS from file
@@ -400,7 +410,7 @@ def _load_config_file(config_path: Path, trusted: bool = True) -> PagevaultConfi
         css_file_path = Path(data["css_file"])
         # Resolve relative paths against config file directory
         if not css_file_path.is_absolute():
-            css_file_path = config_path.parent / css_file_path
+            css_file_path = _config_dir(config_path) / css_file_path
         try:
             config.custom_css = css_file_path.read_text(encoding="utf-8")
         except OSError as e:

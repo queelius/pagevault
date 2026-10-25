@@ -226,6 +226,21 @@ class TestDecryptSite:
         with pytest.raises(PagevaultError):
             doc.decrypt("pw").filename
 
+    def test_corrupt_member_raises_and_writes_nothing(self, tmp_path):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("a.html", "fine")
+            zf.writestr("b.html", "UNIQUE_PAYLOAD")
+        data = buf.getvalue().replace(b"UNIQUE_PAYLOAD", b"BROKEN_PAYLOAD")
+        html = _crafted_wrap(
+            data, {"type": "site", "entry": "a.html", "size": len(data)}
+        )
+        dest = tmp_path / "out"
+
+        with pytest.raises(PagevaultError, match="b.html"):
+            WrapDocument.parse(html).decrypt("pw").extract_site(dest)
+        assert not dest.exists()
+
     def test_corrupt_archive_raises(self, tmp_path):
         html = _crafted_wrap(b"not a zip", {"type": "site", "entry": "index.html"})
 
@@ -366,6 +381,29 @@ class TestUnlockCli:
         assert "Error processing" in result.output
         assert "0 file(s) unlocked" in result.output
         assert not out.exists()
+
+    def test_unlock_batch_continues_past_corrupt_site(self, runner, tmp_path):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("index.html", "UNIQUE_PAYLOAD")
+        data = buf.getvalue().replace(b"UNIQUE_PAYLOAD", b"BROKEN_PAYLOAD")
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        (locked / "a-site.html").write_text(
+            _crafted_wrap(data, {"type": "site", "entry": "index.html"})
+        )
+        (locked / "b-file.html").write_text(
+            _crafted_wrap(b"ok", {"type": "file", "filename": "b.txt", "size": 2})
+        )
+        out = tmp_path / "out"
+
+        result = runner.invoke(
+            main, ["unlock", str(locked), "-p", "pw", "-d", str(out)]
+        )
+
+        assert result.exit_code == 1
+        assert "1 file(s) unlocked, 0 skipped, 1 failed" in result.output
+        assert (out / "b.txt").read_bytes() == b"ok"
 
     def test_unlock_does_not_claim_success_for_unencrypted_regions(
         self, runner, tmp_path

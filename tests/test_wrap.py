@@ -12,6 +12,7 @@ from pagevault.config import CONFIG_FILENAME
 from pagevault.crypto import PagevaultError, content_hash_bytes, decrypt_v4
 from pagevault.viewers import discover_viewers
 from pagevault.wrap import (
+    WrapDocument,
     _generate_wrap_html_v4,
     _get_progress_css,
     _get_renderer_js_v4,
@@ -499,6 +500,51 @@ class TestWrapSite:
         _, meta_b = decrypt_v4(envelope, chunks, "pw-b", username="bob")
         assert meta_a["type"] == "site"
         assert meta_b["type"] == "site"
+
+
+class TestWrapSiteSymlinks:
+    """Symlinks are judged by what they point at, not by their own name."""
+
+    def _bundled(self, site, tmp_path):
+        import io
+        import zipfile
+
+        out = wrap_site(site, password="pw", output_path=tmp_path / "out.html")
+        data = WrapDocument.parse(out.read_text()).decrypt("pw").data
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            return {n: zf.read(n).decode() for n in zf.namelist()}
+
+    @pytest.fixture
+    def site(self, tmp_path):
+        site = tmp_path / "proj" / "site"
+        (site / "assets").mkdir(parents=True)
+        (site / "index.html").write_text("<p>hi</p>")
+        return site
+
+    def test_link_to_hidden_file_is_excluded(self, site, tmp_path):
+        (site.parent / ".pagevault.yaml").write_text("password: SECRET")
+        (site / "assets" / "settings.txt").symlink_to("../../.pagevault.yaml")
+
+        assert "assets/settings.txt" not in self._bundled(site, tmp_path)
+
+    def test_link_outside_the_site_is_excluded(self, site, tmp_path):
+        (tmp_path / "outside.txt").write_text("not part of the site")
+        (site / "ext.txt").symlink_to(tmp_path / "outside.txt")
+
+        assert "ext.txt" not in self._bundled(site, tmp_path)
+
+    def test_link_to_directory_outside_the_site_is_excluded(self, site, tmp_path):
+        (tmp_path / "elsewhere").mkdir()
+        (tmp_path / "elsewhere" / "x.txt").write_text("outside")
+        (site / "linked").symlink_to(tmp_path / "elsewhere")
+
+        assert not any(n.startswith("linked") for n in self._bundled(site, tmp_path))
+
+    def test_link_to_visible_file_inside_the_site_is_kept(self, site, tmp_path):
+        (site / "assets" / "real.css").write_text("p{}")
+        (site / "alias.css").symlink_to("assets/real.css")
+
+        assert self._bundled(site, tmp_path)["alias.css"] == "p{}"
 
 
 class TestWrapSiteFileSelection:

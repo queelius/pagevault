@@ -9,6 +9,7 @@ import json
 import logging
 import mimetypes
 import zipfile
+import zlib
 from dataclasses import dataclass
 from enum import Enum
 from io import BytesIO
@@ -182,14 +183,28 @@ def _site_files(dir_path: Path, output_path: Path) -> list[tuple[Path, str]]:
     hidden paths (any component starting with ``.``: ``.pagevault.yaml``
     with its credentials, ``.git/``, ``.env``) are never included, and
     neither is the output file itself when it lives inside the directory.
+
+    A symlink is bundled as a copy of its target, so the rule is applied to
+    where it points as well as to its own name: a link to a hidden file, or
+    to anything outside ``dir_path``, is left out. ``dir_path`` must be
+    resolved.
     """
+
+    def hidden(rel: Path) -> bool:
+        return any(part.startswith(".") for part in rel.parts)
+
     output_resolved = output_path.resolve()
     selected = []
     for file_path in sorted(dir_path.rglob("*")):
         rel = file_path.relative_to(dir_path)
-        if any(part.startswith(".") for part in rel.parts):
+        if hidden(rel) or not file_path.is_file():
             continue
-        if not file_path.is_file() or file_path.resolve() == output_resolved:
+        target = file_path.resolve()
+        if (
+            target == output_resolved
+            or not target.is_relative_to(dir_path)
+            or hidden(target.relative_to(dir_path))
+        ):
             continue
         selected.append((file_path, rel.as_posix()))
     return selected
@@ -345,9 +360,20 @@ class WrappedPayload:
                         f"Site entry would extract outside {dest}: {member.filename!r}"
                     )
                 targets.append((member, target))
+
+            # Read (and CRC-check) every member before writing any, so a
+            # corrupt archive leaves nothing half-extracted.
+            contents = []
             for member, target in targets:
-                atomic_write(target, archive.read(member))
-        return [target for _, target in targets]
+                try:
+                    contents.append((target, archive.read(member)))
+                except (zipfile.BadZipFile, zlib.error, EOFError) as e:
+                    raise PagevaultError(
+                        f"Corrupt site entry {member.filename!r}: {e}"
+                    ) from e
+        for target, data in contents:
+            atomic_write(target, data)
+        return [target for target, _ in contents]
 
 
 @dataclass

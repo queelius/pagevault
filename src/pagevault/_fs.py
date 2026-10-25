@@ -31,7 +31,9 @@ def atomic_write(path: Path, data: str | bytes) -> None:
     except FileNotFoundError:
         mode = _default_mode()
 
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    # A short fixed prefix: deriving it from path.name would push names near
+    # the filesystem's length limit (255 bytes) over it.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".pv-", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data.encode("utf-8") if isinstance(data, str) else data)

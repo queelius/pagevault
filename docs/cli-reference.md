@@ -71,7 +71,7 @@ pagevault lock page.html --dry-run
 | `--pad` | | Pad content to power-of-2 boundary before encryption (prevents size leakage) |
 | `--dry-run` | | Preview without changes |
 
-With `--site`, hidden paths (any file or directory whose name starts with `.`, such as `.pagevault.yaml`, `.git/` and `.env`) are never bundled, nor is the output file itself if it lies inside the directory. Everyone who can unlock the site can read every bundled file.
+With `--site`, hidden paths (any file or directory whose name starts with `.`, such as `.pagevault.yaml`, `.git/` and `.env`) are never bundled, nor is the output file itself if it lies inside the directory. A symlink is bundled as a copy of its target, so the same rule applies to where it points: links to hidden files, or to anything outside the directory, are left out. Everyone who can unlock the site can read every bundled file.
 
 ---
 

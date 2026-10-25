@@ -222,6 +222,25 @@ class TestConfigTrust:
         config = load_config(start_path=project / "doc.txt")
         assert config.viewers_dir == project / "viewers"
 
+    def test_symlinked_config_resolves_paths_where_it_was_trusted(
+        self, foreign_project, tmp_path, monkeypatch
+    ):
+        """Trust and relative paths must be judged from the same directory.
+
+        A foreign project whose config is a symlink to the user's own
+        (trusted) config must not get its own viewers/ executed.
+        """
+        project, marker = foreign_project
+        own = tmp_path / "own"
+        (own / "viewers").mkdir(parents=True)
+        (own / CONFIG_FILENAME).write_text('password: "pw"\nviewers_dir: viewers\n')
+        (project / CONFIG_FILENAME).symlink_to(own / CONFIG_FILENAME)
+        monkeypatch.chdir(own)
+
+        config = load_config(start_path=project / "doc.txt")
+
+        assert config.viewers_dir == own / "viewers"
+
     def test_explicit_config_path_is_trusted(self, foreign_project, elsewhere):
         project, _ = foreign_project
         (project / CONFIG_FILENAME).write_text('password: "pw"\nviewers_dir: viewers\n')

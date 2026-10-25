@@ -20,6 +20,15 @@ def test_writes_text_and_bytes(tmp_path):
     assert (tmp_path / "b.bin").read_bytes() == b"\x00\xff"
 
 
+def test_name_at_the_filesystem_limit(tmp_path):
+    limit = os.pathconf(tmp_path, "PC_NAME_MAX")
+    target = tmp_path / ("a" * (limit - len(".html")) + ".html")
+
+    atomic_write(target, "x")
+
+    assert target.read_text() == "x"
+
+
 def test_interrupted_write_keeps_old_file_and_no_temp(tmp_path, monkeypatch):
     target = tmp_path / "locked.html"
     target.write_text("old ciphertext")
