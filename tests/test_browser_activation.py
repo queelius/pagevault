@@ -15,22 +15,13 @@ import pytest
 
 from pagevault.parser import lock_html
 
-playwright = pytest.importorskip("playwright.sync_api")
+pytest.importorskip("playwright.sync_api")
 
 
 # Use string indirection so security hook does not flag this file.
 # These are the Python-side names for browser globals we test against.
 _DOC_WRITE = "document." + "write"
 _WRITE_CALL = _DOC_WRITE + "('<p>this should not appear</p>')"
-
-
-@pytest.fixture(scope="module")
-def browser():
-    """Module-scoped Chromium instance."""
-    with playwright.sync_playwright() as p:
-        b = p.chromium.launch()
-        yield b
-        b.close()
 
 
 @pytest.fixture

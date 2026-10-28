@@ -17,15 +17,7 @@ from bs4 import BeautifulSoup
 from pagevault.crypto import CHUNK_SIZE
 from pagevault.wrap import WrapDocument, wrap_file, wrap_site
 
-playwright = pytest.importorskip("playwright.sync_api")
-
-
-@pytest.fixture(scope="module")
-def browser():
-    with playwright.sync_playwright() as p:
-        b = p.chromium.launch()
-        yield b
-        b.close()
+pytest.importorskip("playwright.sync_api")
 
 
 @pytest.fixture

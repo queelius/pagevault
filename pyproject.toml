@@ -42,7 +42,8 @@ dev = [
     "ruff>=0.1",
 ]
 # Real-browser tests (tests/test_browser_*.py); they skip without it.
-# After installing: python -m playwright install --only-shell chromium
+# They use the system Google Chrome when present, else Playwright's own
+# Chromium (python -m playwright install --only-shell chromium).
 browser = [
     "playwright>=1.40",
 ]
