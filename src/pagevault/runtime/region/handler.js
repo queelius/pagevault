@@ -62,7 +62,17 @@
         button.disabled = true;
         button.textContent = 'Decrypting...';
 
-        const success = await this._decrypt(password, username);
+        // Derive the key here rather than in decryptV4, so that remembering
+        // stores the key and never the password (see storage.js).
+        const salt = this._snapshot && this._snapshot.envelope.salt;
+        let bits = null;
+        let success = false;
+        try {
+          bits = await deriveWrappingBits(password, username, salt);
+          success = await this._decrypt(await importWrappingKey(bits));
+        } catch (err) {
+          console.error('[pagevault] Key derivation failed:', err);
+        }
 
         if (!success) {
           error.textContent = CONFIG.errorText;
@@ -72,11 +82,10 @@
           passwordInput.value = '';
           passwordInput.focus();
         } else {
-          // Store credentials if requested
           if (wantsRemember) {
-            storeCredentials(password, username, 'local');
+            await rememberKey(salt, bits, 'local');
           } else if (remember === 'session') {
-            storeCredentials(password, username, 'session');
+            await rememberKey(salt, bits, 'session');
           }
         }
       });
@@ -89,26 +98,26 @@
     }
 
     async _tryAutoDecrypt() {
+      purgeLegacyPasswords();
       // Check URL fragment (only logout supported)
-      const fragment = checkFragment();
+      const fragment = await checkFragment();
       if (fragment === 'logout') return;
 
-      // Try stored credentials
-      const cred = getStoredCredentials();
-      if (cred) {
-        await this._decrypt(cred.password, cred.username || null);
+      if (!this._snapshot) return;
+      const key = await recallKey(this._snapshot.envelope.salt);
+      if (key) {
+        await this._decrypt(key);
       }
     }
 
-    async _decrypt(password, username) {
+    async _decrypt(wrappingKey) {
       const el = this.el;
-      if (!this._snapshot) return false;
+      if (!this._snapshot || el._pvDecrypted) return false;
 
-      const result = await decryptV4(
+      const result = await decryptV4WithKey(
         this._snapshot.envelope,
         this._snapshot.chunks,
-        password,
-        username
+        wrappingKey
       );
       if (result === null) return false;
 

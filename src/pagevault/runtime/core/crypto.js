@@ -4,6 +4,12 @@
   //   const result = await decryptV4(envelope, chunks, password, username, onProgress);
   //   // result is {bytes: Uint8Array, meta: object} or null on failure.
   //
+  // Or in two steps, when the caller wants to remember the key rather than
+  // the password (see storage.js):
+  //   const bits = await deriveWrappingBits(password, username, envelope.salt);
+  //   const key = await importWrappingKey(bits);
+  //   const result = await decryptV4WithKey(envelope, chunks, key, onProgress);
+  //
   // The envelope is the parsed JSON from a <script data-pv-meta>/<script id="pv-meta"> tag.
   // chunks is an ordered array of base64 strings (region callers pass
   // the chunk text content; wrap callers typically collect from the DOM
@@ -33,17 +39,27 @@
     return iv;
   }
 
-  async function _deriveKey(secret, salt) {
-    const enc = new TextEncoder();
+  // The 256-bit key a password unlocks: PBKDF2 over "username:password"
+  // (or the password alone) with the envelope's salt. It opens the key blobs
+  // of every envelope sharing that salt and password, but reveals nothing
+  // about the password itself, so it is what "remember" may store.
+  async function deriveWrappingBits(password, username, saltHex) {
+    const secret = username ? username + ':' + password : password;
     const keyMaterial = await crypto.subtle.importKey(
-      'raw', enc.encode(secret), 'PBKDF2', false, ['deriveBits', 'deriveKey']
+      'raw', new TextEncoder().encode(secret), 'PBKDF2', false, ['deriveBits']
     );
-    return crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: salt, iterations: 310000, hash: 'SHA-256' },
+    return crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: _hexToBytes(saltHex), iterations: 310000, hash: 'SHA-256' },
       keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['decrypt']
+      256
+    );
+  }
+
+  // Non-extractable: page script can use the key, never read it back out,
+  // including from IndexedDB where a remembered key is kept.
+  function importWrappingKey(bits) {
+    return crypto.subtle.importKey(
+      'raw', bits, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
     );
   }
 
@@ -61,14 +77,25 @@
   }
 
   async function decryptV4(envelope, chunks, password, username, onProgress) {
+    let wrappingKey;
     try {
       if (envelope.v !== 4) {
         throw new Error('Unsupported envelope version: ' + envelope.v);
       }
+      const bits = await deriveWrappingBits(password, username, envelope.salt);
+      wrappingKey = await importWrappingKey(bits);
+    } catch (e) {
+      console.error('v4 decryption failed:', e);
+      return null;
+    }
+    return decryptV4WithKey(envelope, chunks, wrappingKey, onProgress);
+  }
 
-      const salt = _hexToBytes(envelope.salt);
-      const secret = username ? username + ':' + password : password;
-      const wrappingKey = await _deriveKey(secret, salt);
+  async function decryptV4WithKey(envelope, chunks, wrappingKey, onProgress) {
+    try {
+      if (envelope.v !== 4) {
+        throw new Error('Unsupported envelope version: ' + envelope.v);
+      }
 
       // Unwrap CEK — try each key blob until one succeeds.
       let cekRaw = null;

@@ -233,9 +233,12 @@ defaults:
 ```
 
 - `"none"`: Always prompt
-- `"session"`: Forget when browser closes
+- `"session"`: Forget when the tab closes
 - `"local"`: Remember on this device (expires after remember_days)
 - `"ask"`: Let visitor choose
+
+The password itself is never stored, only a key that opens pages locked with
+the same password and salt. See [Security](security.md#remembered-passwords).
 
 **Q: Can I logout visitors?**
 A: Yes, use URL fragment:
@@ -244,7 +247,7 @@ A: Yes, use URL fragment:
 https://example.com/page.html#pagevault_logout
 ```
 
-Clears stored password from browser.
+Clears every remembered key for that site from the browser.
 
 ## Inspection & Verification
 

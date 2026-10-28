@@ -104,3 +104,31 @@ test('decryptV4 with wrong password returns null', async () => {
   const result = await context.decryptV4(envelope, chunks, 'wrong-password', null);
   assert.equal(result, null);
 });
+
+test('a key derived once opens the envelope, and is not extractable', async () => {
+  const { envelope, chunks, password, expected_text } = JSON.parse(
+    readFileSync(resolve(__dirname, 'fixtures/v4_simple.json'), 'utf-8')
+  );
+
+  const bits = await context.deriveWrappingBits(password, null, envelope.salt);
+  assert.equal(bits.byteLength, 32);
+  const key = await context.importWrappingKey(bits);
+  assert.equal(key.extractable, false);
+  await assert.rejects(crypto.subtle.exportKey('raw', key));
+
+  const result = await context.decryptV4WithKey(envelope, chunks, key);
+  assert.equal(new TextDecoder().decode(result.bytes), expected_text);
+
+  const wrongBits = await context.deriveWrappingBits('wrong', null, envelope.salt);
+  const wrong = await context.importWrappingKey(wrongBits);
+  assert.equal(await context.decryptV4WithKey(envelope, chunks, wrong), null);
+});
+
+test('the username is bound into the derived key', async () => {
+  const salt = '00'.repeat(16);
+  const plain = new Uint8Array(await context.deriveWrappingBits('pw', null, salt));
+  const alice = new Uint8Array(await context.deriveWrappingBits('pw', 'alice', salt));
+  const joined = new Uint8Array(await context.deriveWrappingBits('alice:pw', null, salt));
+  assert.notDeepEqual(alice, plain);
+  assert.deepEqual(alice, joined);
+});
