@@ -503,7 +503,9 @@ template:
 def _write_credential_file(path: Path, content: str) -> None:
     """Atomically write a file that holds passwords, readable by its owner only."""
     try:
-        atomic_write(path, content, mode=CREDENTIAL_FILE_MODE)
+        # A symlinked config (e.g. into a dotfiles repo) is updated in place
+        # rather than detached from its target.
+        atomic_write(path, content, mode=CREDENTIAL_FILE_MODE, follow_symlinks=True)
     except OSError as e:
         raise PagevaultError(f"Cannot write config file {path}: {e}") from e
 

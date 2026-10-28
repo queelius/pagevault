@@ -14,7 +14,12 @@ def _default_mode() -> int:
     return 0o666 & ~umask
 
 
-def atomic_write(path: Path, data: str | bytes, mode: int | None = None) -> None:
+def atomic_write(
+    path: Path,
+    data: str | bytes,
+    mode: int | None = None,
+    follow_symlinks: bool = False,
+) -> None:
     """Write ``data`` to ``path`` so it is never seen partially written.
 
     The data goes to a temporary file in the same directory, which is then
@@ -26,10 +31,13 @@ def atomic_write(path: Path, data: str | bytes, mode: int | None = None) -> None
     mkstemp's 0600. Pass ``mode`` (e.g. 0o600 for a file holding passwords)
     to set it outright; the data is never readable under a wider mode,
     since the temporary file starts as 0600.
+
+    A symlink at ``path`` is replaced by the new file, so a link planted in
+    an output directory cannot redirect the write elsewhere. Pass
+    ``follow_symlinks`` to write to the link's target instead, for a file
+    the user deliberately linked (a config kept in a dotfiles repo).
     """
-    # Write through a symlink, as open() would: replacing the link itself
-    # would detach e.g. a config kept in a dotfiles repo from its target.
-    path = Path(os.path.realpath(path))
+    path = Path(os.path.realpath(path) if follow_symlinks else path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if mode is None:
         try:

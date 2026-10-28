@@ -899,6 +899,20 @@ class TestCredentialFileModes:
         assert self._mode(path) == 0o600
         assert yaml.safe_load(path.read_text())["users"] == {"alice": "pw-alice"}
 
+    def test_symlinked_config_is_updated_in_place(self, tmp_path):
+        target = tmp_path / "dotfiles" / "pagevault.yaml"
+        target.parent.mkdir()
+        target.write_text('password: "pw"\n')
+        target.chmod(0o644)
+        link = tmp_path / CONFIG_FILENAME
+        link.symlink_to(target)
+
+        update_config_users(link, {"alice": "pw-alice"})
+
+        assert link.is_symlink()
+        assert self._mode(target) == 0o600
+        assert yaml.safe_load(target.read_text())["users"] == {"alice": "pw-alice"}
+
     def test_cli_user_add_and_config_set(self, tmp_path):
         from click.testing import CliRunner
 
