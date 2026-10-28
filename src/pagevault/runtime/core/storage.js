@@ -22,20 +22,37 @@
   const LEGACY_PASSWORDS = 'pagevault_passwords';
 
   function purgeLegacyPasswords() {
-    try {
-      localStorage.removeItem(LEGACY_PASSWORDS);
-      sessionStorage.removeItem(LEGACY_PASSWORDS);
-    } catch (e) { /* storage unavailable */ }
+    // Separately: one storage throwing must not spare the other's copy.
+    try { localStorage.removeItem(LEGACY_PASSWORDS); } catch (e) { /* unavailable */ }
+    try { sessionStorage.removeItem(LEGACY_PASSWORDS); } catch (e) { /* unavailable */ }
   }
 
-  function _openKeyDb() {
+  // Open the key database at its current version, creating the store if
+  // it is missing. Any same-origin page (for file://, any local HTML file)
+  // can create a "pagevault" database without it; opening that at a fixed
+  // version would never upgrade, so a missing store is repaired by opening
+  // one version higher. Resolves to null when IndexedDB is unusable.
+  function _openKeyDb(version) {
     return new Promise(function(resolve) {
       try {
-        const req = indexedDB.open(KEY_DB_NAME, 1);
+        const req = version ? indexedDB.open(KEY_DB_NAME, version)
+                            : indexedDB.open(KEY_DB_NAME);
         req.onupgradeneeded = function() {
-          req.result.createObjectStore(KEY_STORE, { keyPath: 'salt' });
+          if (!req.result.objectStoreNames.contains(KEY_STORE)) {
+            req.result.createObjectStore(KEY_STORE, { keyPath: 'salt' });
+          }
         };
-        req.onsuccess = function() { resolve(req.result); };
+        req.onsuccess = function() {
+          const db = req.result;
+          // Let another tab's repair upgrade proceed.
+          db.onversionchange = function() { db.close(); };
+          if (db.objectStoreNames.contains(KEY_STORE)) {
+            resolve(db);
+            return;
+          }
+          db.close();
+          resolve(version ? null : _openKeyDb(db.version + 1));
+        };
         req.onerror = function() { resolve(null); };
         req.onblocked = function() { resolve(null); };
       } catch (e) {

@@ -263,3 +263,43 @@ def test_legacy_plaintext_passwords_are_purged(context, tmp_path):
     page.reload()
     assert _stays_locked(page)  # the old entry is not used either
     _assert_no_password(_storage(page))
+
+
+def test_one_remembered_key_reopens_every_region_without_a_config_salt(
+    context, tmp_path
+):
+    html = (
+        "<html><body><pagevault><p id='a'>A</p></pagevault>"
+        "<pagevault><p id='b'>B</p></pagevault></body></html>"
+    )
+    path = tmp_path / "two.html"
+    path.write_text(lock_html(html, password=PASSWORD), encoding="utf-8")
+    page = context.new_page()
+    page.goto(f"file://{path}")
+    _submit(page, remember=True)  # the first region's form
+    _wait_decrypted(page)
+    _storage(page, until=lambda d: d["records"])
+
+    page.reload()
+    page.wait_for_function(
+        "[...document.querySelectorAll('pagevault')].every(e => e._pvDecrypted)"
+    )
+    assert page.locator("#b").text_content() == "B"
+
+
+def test_repairs_a_foreign_database_without_the_key_store(context, tmp_path):
+    # Before any pagevault script runs, another same-origin page has created
+    # "pagevault" with no object stores. (On later loads the database is
+    # already at a higher version, and this open fails harmlessly.)
+    context.add_init_script(
+        "const q = indexedDB.open('pagevault', 1);q.onsuccess = () => q.result.close();"
+    )
+    url = _locked_page(tmp_path, "one")
+    page = context.new_page()
+    page.goto(url)
+    _submit(page, remember=True)
+    _wait_decrypted(page)
+    _storage(page, until=lambda d: d["records"])
+
+    page.reload()
+    _wait_decrypted(page)

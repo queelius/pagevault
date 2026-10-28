@@ -73,3 +73,17 @@ def test_explicit_mode_overrides_existing(tmp_path):
 
     assert target.read_text() == "new"
     assert _mode(target) == 0o600
+
+
+def test_writes_through_a_symlink(tmp_path):
+    target = tmp_path / "dotfiles" / "pagevault.yaml"
+    target.parent.mkdir()
+    target.write_text("old")
+    link = tmp_path / ".pagevault.yaml"
+    link.symlink_to(target)
+
+    atomic_write(link, "new", mode=0o600)
+
+    assert link.is_symlink()
+    assert target.read_text() == "new"
+    assert _mode(target) == 0o600

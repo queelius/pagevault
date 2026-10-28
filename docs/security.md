@@ -235,7 +235,10 @@ password:
   bytes, until the tab closes.
 
 Either way the key opens only pages locked with that password and that salt;
-a password reused elsewhere is not exposed. Anyone with access to the browser
+a password reused elsewhere is not exposed. Every region of a page shares one
+salt, and pages locked with a config that sets `salt` (as `pagevault config
+init` does) share it too, so one "remember" covers them all; pages locked
+without a configured salt are remembered one page at a time. Anyone with access to the browser
 profile can still open those pages while the key lasts, which is what
 remembering means. `#pagevault_logout` forgets every key for the site.
 

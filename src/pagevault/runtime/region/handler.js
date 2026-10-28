@@ -112,7 +112,7 @@
 
     async _decrypt(wrappingKey) {
       const el = this.el;
-      if (!this._snapshot || el._pvDecrypted) return false;
+      if (!this._snapshot) return false;
 
       const result = await decryptV4WithKey(
         this._snapshot.envelope,
@@ -140,6 +140,12 @@
           return false;
         }
       }
+
+      // Auto-unlock and a submitted password can race. The loser's key has
+      // still been proven good (remembering it is then safe), but the
+      // content must be revealed only once. Nothing below awaits until
+      // _pvDecrypted is set, so this check cannot interleave.
+      if (el._pvDecrypted) return true;
 
       // Clear v4 attributes and reveal content.
       el.removeAttribute('data-pv-v4');

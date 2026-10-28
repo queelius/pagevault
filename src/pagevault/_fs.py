@@ -27,7 +27,9 @@ def atomic_write(path: Path, data: str | bytes, mode: int | None = None) -> None
     to set it outright; the data is never readable under a wider mode,
     since the temporary file starts as 0600.
     """
-    path = Path(path)
+    # Write through a symlink, as open() would: replacing the link itself
+    # would detach e.g. a config kept in a dotfiles repo from its target.
+    path = Path(os.path.realpath(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     if mode is None:
         try:

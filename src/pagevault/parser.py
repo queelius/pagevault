@@ -19,6 +19,7 @@ from .crypto import (
     content_hash,
     decrypt_v4,
     encrypt_v4,
+    generate_salt,
     pad_content_bytes,
 )
 
@@ -276,6 +277,12 @@ def lock_html(
             "encrypted_at": datetime.now(timezone.utc).isoformat(),
             "version": __version__,
         }
+
+    # One salt for every region in the document: a remembered key (derived
+    # from the password and the salt) then reopens all of them, as the
+    # password itself would. A configured salt extends that across pages.
+    if salt is None:
+        salt = generate_salt()
 
     encrypted_any = False
     had_encrypted = (
@@ -538,13 +545,16 @@ def sync_html_keys(
     old_users: dict[str, str] | None = None,
     new_users: dict[str, str] | None = None,
     new_password: str | None = None,
+    salt: bytes | None = None,
 ) -> str:
     """Re-wrap keys for all encrypted elements in an HTML document.
 
     Decrypts each v4 envelope using the old credentials and re-encrypts
     with the new credential set, replacing the <script data-pv-meta> and
     chunk scripts in place. A fresh CEK is generated each call, so the
-    envelope's salt, iv_base, and chunks all change.
+    envelope's iv_base and chunks all change. Every region gets ``salt``
+    (pass the config's, so remembered keys keep working across pages), or
+    one fresh salt for the whole document when it is None.
 
     True key-only rotation (re-wrap CEK without re-encrypting chunks) is
     not currently supported; every sync produces fresh ciphertext.
@@ -556,12 +566,15 @@ def sync_html_keys(
         old_users: Dict of old {username: password} pairs.
         new_users: New {username: password} dict for re-wrapping.
         new_password: New single password for re-wrapping.
+        salt: Salt for the new envelopes; see above.
 
     Returns:
         Modified HTML with re-wrapped keys.
     """
     if not has_pagevault_elements(html):
         return html
+    if salt is None:
+        salt = generate_salt()
 
     soup = _parse_html(html)
 
@@ -622,6 +635,7 @@ def sync_html_keys(
         new_envelope, new_chunks = encrypt_v4(
             recovered_pt,
             password=new_password,
+            salt=salt,
             users=new_users,
             meta=recovered_meta,
         )
