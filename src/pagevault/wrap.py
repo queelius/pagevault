@@ -9,16 +9,24 @@ import json
 import logging
 import mimetypes
 import zipfile
+import zlib
+from dataclasses import dataclass
+from enum import Enum
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
+from bs4 import BeautifulSoup, Tag
+
+from ._fs import atomic_write
 from .config import PagevaultConfig
 from .crypto import (
     PagevaultError,
     content_hash_bytes,
+    decrypt_v4,
     encrypt_v4,
     pad_content_bytes,
 )
+from .parser import _parse_html, has_pagevault_elements
 from .runtime._loader import _escape_for_script_block
 from .viewers import discover_viewers, resolve_viewer
 
@@ -64,31 +72,30 @@ def _encrypt_payload(
 ) -> tuple[dict, list[str]]:
     """Hash, optionally pad, then v4-chunk-encrypt raw bytes.
 
-    Returns the envelope (with ``content_hash`` added) and the list of
-    base64-encoded chunk ciphertexts. Shared by :func:`wrap_file` and
-    :func:`wrap_site` — they differ only in how ``data`` and ``meta`` are
-    built.
+    ``content_hash`` and the unpadded ``size`` go into the *encrypted* meta,
+    never the cleartext envelope: a plaintext hash readable without the
+    password would let anyone confirm a guess about the contents. Shared by
+    :func:`wrap_file` and :func:`wrap_site`, which differ only in how
+    ``data`` and ``meta`` are built.
+
+    Returns the envelope and the list of base64-encoded chunk ciphertexts.
     """
-    hash_value = content_hash_bytes(data)
     use_pad = pad or (config and config.pad)
     payload = pad_content_bytes(data) if use_pad else data
 
-    envelope, chunks = encrypt_v4(
+    return encrypt_v4(
         payload,
         password=password,
         salt=config.salt if config else None,
         users=users,
-        meta=meta,
+        meta={**meta, "size": len(data), "content_hash": content_hash_bytes(data)},
     )
-    envelope["content_hash"] = hash_value
-    return envelope, chunks
 
 
 def _write_wrap_output(output_path: Path, html: str) -> None:
     """Create parent dirs and write the wrapped HTML output."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        output_path.write_text(html, encoding="utf-8")
+        atomic_write(output_path, html)
     except OSError as e:
         raise PagevaultError(f"Cannot write output {output_path}: {e}") from e
 
@@ -159,6 +166,50 @@ def wrap_file(
     return output_path
 
 
+def default_site_output_path(dir_path: Path) -> Path:
+    """Default output for a wrapped site: ``<dirname>.html`` beside the directory.
+
+    The directory is resolved first so that ``.`` yields ``../<name>.html``
+    rather than a file literally named ``.html``.
+    """
+    dir_path = Path(dir_path).resolve()
+    return dir_path.parent / f"{dir_path.name}.html"
+
+
+def _site_files(dir_path: Path, output_path: Path) -> list[tuple[Path, str]]:
+    """List ``(path, archive_name)`` pairs to bundle from a site directory.
+
+    The bundle is readable by every user the site is encrypted for, so
+    hidden paths (any component starting with ``.``: ``.pagevault.yaml``
+    with its credentials, ``.git/``, ``.env``) are never included, and
+    neither is the output file itself when it lives inside the directory.
+
+    A symlink is bundled as a copy of its target, so the rule is applied to
+    where it points as well as to its own name: a link to a hidden file, or
+    to anything outside ``dir_path``, is left out. ``dir_path`` must be
+    resolved.
+    """
+
+    def hidden(rel: Path) -> bool:
+        return any(part.startswith(".") for part in rel.parts)
+
+    output_resolved = output_path.resolve()
+    selected = []
+    for file_path in sorted(dir_path.rglob("*")):
+        rel = file_path.relative_to(dir_path)
+        if hidden(rel) or not file_path.is_file():
+            continue
+        target = file_path.resolve()
+        if (
+            target == output_resolved
+            or not target.is_relative_to(dir_path)
+            or hidden(target.relative_to(dir_path))
+        ):
+            continue
+        selected.append((file_path, rel.as_posix()))
+    return selected
+
+
 def wrap_site(
     dir_path: Path,
     password: str | None = None,
@@ -184,21 +235,22 @@ def wrap_site(
     Raises:
         PagevaultError: If directory cannot be read or encryption fails.
     """
-    dir_path = Path(dir_path)
+    dir_path = Path(dir_path).resolve()
     if not dir_path.is_dir():
         raise PagevaultError(f"Directory not found: {dir_path}")
+
+    if output_path is None:
+        output_path = default_site_output_path(dir_path)
+    output_path = Path(output_path)
 
     # Zip the directory
     zip_buffer = BytesIO()
     file_list = []
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(dir_path.rglob("*")):
-            if file_path.is_file():
-                rel = file_path.relative_to(dir_path)
-                rel_str = str(rel).replace("\\", "/")  # Normalize to forward slashes
-                file_list.append(rel_str)
-                zf.write(file_path, rel_str)
+        for file_path, arcname in _site_files(dir_path, output_path):
+            file_list.append(arcname)
+            zf.write(file_path, arcname)
 
     if not file_list:
         raise PagevaultError(f"Directory is empty: {dir_path}")
@@ -235,11 +287,222 @@ def wrap_site(
         include_jszip=True,
     )
 
-    if output_path is None:
-        output_path = dir_path.parent / f"{dir_path.name}.html"
-    output_path = Path(output_path)
     _write_wrap_output(output_path, html)
     return output_path
+
+
+class WrapKind(str, Enum):
+    """What a wrapped payload holds (the ``type`` field of its meta)."""
+
+    FILE = "file"
+    SITE = "site"
+
+
+@dataclass(frozen=True)
+class WrappedPayload:
+    """The decrypted contents of a wrapped file or site.
+
+    ``data`` is the original bytes (padding removed, hash verified): the
+    file itself for :attr:`WrapKind.FILE`, a zip archive for
+    :attr:`WrapKind.SITE`. ``meta`` is the decrypted metadata. It is
+    authenticated, but written by whoever made the file, so names in it
+    are sanitized before they touch the filesystem.
+    """
+
+    kind: WrapKind
+    meta: dict
+    data: bytes
+
+    @property
+    def filename(self) -> str:
+        """The wrapped file's name, reduced to a bare final component."""
+        if self.kind is not WrapKind.FILE:
+            raise PagevaultError(f"A {self.kind.value} payload has no filename")
+        stored = str(self.meta.get("filename", ""))
+        name = PureWindowsPath(PurePosixPath(stored).name).name
+        if name in ("", ".", ".."):
+            raise PagevaultError(f"Unusable filename in payload: {stored!r}")
+        return name
+
+    def extract_site(self, dest: Path) -> list[Path]:
+        """Extract a site payload under ``dest``; returns the files written.
+
+        Every member is checked before anything is written, so an archive
+        with an entry that would land outside ``dest`` writes nothing.
+        """
+        if self.kind is not WrapKind.SITE:
+            raise PagevaultError(f"A {self.kind.value} payload is not a site")
+        dest = Path(dest)
+        try:
+            archive = zipfile.ZipFile(BytesIO(self.data))
+        except zipfile.BadZipFile as e:
+            raise PagevaultError(f"Site payload is not a valid zip: {e}") from e
+
+        root = dest.resolve()
+        with archive:
+            # Resolve and check every target before writing any. Both slash
+            # styles separate parts, and drive-qualified parts ("C:") are
+            # refused because joining one onto dest discards dest on Windows.
+            targets = []
+            for member in archive.infolist():
+                if member.is_dir():
+                    continue
+                parts = PurePosixPath(member.filename.replace("\\", "/")).parts
+                target = root.joinpath(*parts).resolve() if parts else root
+                if (
+                    not parts
+                    or parts[0] == "/"
+                    or any(part == ".." or ":" in part for part in parts)
+                    or not target.is_relative_to(root)
+                    or target == root
+                ):
+                    raise PagevaultError(
+                        f"Site entry would extract outside {dest}: {member.filename!r}"
+                    )
+                targets.append((member, target))
+
+            # Read (and CRC-check) every member before writing any, so a
+            # corrupt archive leaves nothing half-extracted.
+            contents = []
+            for member, target in targets:
+                try:
+                    contents.append((target, archive.read(member)))
+                except (zipfile.BadZipFile, zlib.error, EOFError) as e:
+                    raise PagevaultError(
+                        f"Corrupt site entry {member.filename!r}: {e}"
+                    ) from e
+        for target, data in contents:
+            atomic_write(target, data)
+        return [target for target, _ in contents]
+
+
+@dataclass
+class WrapDocument:
+    """A parsed wrapped-file HTML document.
+
+    The Python-side reader for the encoding :func:`_generate_wrap_html_v4`
+    writes: a ``<pagevault data-pv-chunked>`` element plus document-level
+    ``<script id="pv-meta">`` and ``<script id="pv-N">`` tags. Chunks are
+    located by id for ``N < chunk_count``, exactly as the browser runtime
+    does; that count is unauthenticated, so :meth:`decrypt` checks the
+    result against the size in the encrypted meta.
+    """
+
+    soup: BeautifulSoup
+    element: Tag
+    meta_script: Tag
+    envelope: dict
+    chunk_tags: list[Tag]
+
+    @classmethod
+    def parse(cls, html: str) -> "WrapDocument | None":
+        """Parse ``html``; returns None unless it is a wrapped document."""
+        if not has_pagevault_elements(html):
+            return None
+        soup = _parse_html(html)
+        element = soup.find("pagevault", attrs={"data-pv-chunked": True})
+        meta_script = soup.find("script", id="pv-meta")
+        if element is None or meta_script is None:
+            return None
+        try:
+            envelope = json.loads(meta_script.string or "")
+        except json.JSONDecodeError as e:
+            raise PagevaultError(f"Invalid pv-meta JSON: {e}") from e
+        if not isinstance(envelope, dict):
+            raise PagevaultError("Invalid pv-meta: expected a JSON object")
+        count = envelope.get("chunk_count", 0)
+        if not isinstance(count, int) or count < 0:
+            raise PagevaultError(f"Invalid chunk_count: {count!r}")
+        chunk_tags = []
+        for i in range(count):
+            tag = soup.find("script", id=f"pv-{i}")
+            if tag is None:
+                raise PagevaultError(f"Missing chunk {i} of {count}")
+            chunk_tags.append(tag)
+        return cls(soup, element, meta_script, envelope, chunk_tags)
+
+    def decrypt(self, password: str, username: str | None = None) -> WrappedPayload:
+        """Decrypt with one credential, verifying size and content hash."""
+        chunks = [(tag.string or "").strip() for tag in self.chunk_tags]
+        data, meta = decrypt_v4(self.envelope, chunks, password, username=username)
+        if not isinstance(meta, dict):
+            raise PagevaultError("Invalid payload metadata")
+        try:
+            kind = WrapKind(meta.get("type"))
+        except ValueError:
+            raise PagevaultError(
+                f"Unknown wrapped payload type: {meta.get('type')!r}"
+            ) from None
+
+        # Only the encrypted meta is trusted here. Files from pagevault
+        # <= 0.4.2 also carry a cleartext envelope content_hash, which is
+        # unauthenticated and deliberately ignored.
+        size = meta.get("size")
+        if isinstance(size, int):
+            if len(data) < size:
+                raise PagevaultError("Integrity check failed: content truncated")
+            data = data[:size]
+        expected = meta.get("content_hash")
+        if expected and content_hash_bytes(data) != expected:
+            raise PagevaultError("Integrity check failed: content hash mismatch")
+        return WrappedPayload(kind=kind, meta=meta, data=data)
+
+    def rekey(self, old_users: dict[str, str], new_users: dict[str, str]) -> str:
+        """Re-encrypt for ``new_users``, recovering the content with any old user.
+
+        Produces fresh ciphertext (new CEK, salt and IVs) and keeps the
+        padding, metadata and runtime as they were; only the envelope and
+        chunk scripts change.
+        """
+        if not new_users:
+            raise PagevaultError("'new_users' must not be empty")
+        payload = None
+        for username, password in old_users.items():
+            try:
+                payload = self.decrypt(password, username=username)
+                break
+            except PagevaultError:
+                continue
+        if payload is None:
+            raise PagevaultError("Cannot recover content: no valid old credentials")
+
+        envelope, chunks = _encrypt_payload(
+            payload.data,
+            payload.meta,
+            password=None,
+            users=new_users,
+            config=None,
+            pad=self.envelope.get("total_size") != len(payload.data),
+        )
+
+        self.meta_script.string = json.dumps(envelope)
+        for tag in self.chunk_tags:
+            tag.extract()
+        anchor = self.meta_script
+        self.chunk_tags = []
+        for i, chunk in enumerate(chunks):
+            tag = self.soup.new_tag("script", id=f"pv-{i}", type="x-pv")
+            tag.string = chunk
+            anchor.insert_after(tag)
+            anchor = tag
+            self.chunk_tags.append(tag)
+        self.element["data-mode"] = "user"
+        self.envelope = envelope
+        return str(self.soup)
+
+
+def unwrap_html(
+    html: str, password: str, username: str | None = None
+) -> WrappedPayload:
+    """Decrypt a wrapped-file HTML document.
+
+    Raises:
+        PagevaultError: If ``html`` is not a wrapped document or decryption fails.
+    """
+    doc = WrapDocument.parse(html)
+    if doc is None:
+        raise PagevaultError("Not a pagevault wrapped file")
+    return doc.decrypt(password, username=username)
 
 
 def _log_active_viewers(viewers: list) -> None:
@@ -579,5 +842,3 @@ def _get_site_renderer_js() -> str:
     from .runtime import build_wrap_js
 
     return build_wrap_js(include_jszip=True, is_site=True)
-
-

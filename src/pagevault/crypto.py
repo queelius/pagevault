@@ -443,10 +443,7 @@ def decrypt_v4(
     # chunk script would only surface as an opaque GCM-tag failure deep
     # in the decryption loop.
     expected_chunk_count = envelope.get("chunk_count")
-    if (
-        isinstance(expected_chunk_count, int)
-        and expected_chunk_count != len(chunks)
-    ):
+    if isinstance(expected_chunk_count, int) and expected_chunk_count != len(chunks):
         raise PagevaultError(
             f"chunk_count mismatch: envelope claims {expected_chunk_count}, "
             f"got {len(chunks)} chunk(s)"

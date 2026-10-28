@@ -185,13 +185,13 @@ class TestDocumentWriteProtection:
 
 class TestEdgeCases:
     def test_no_scripts_no_error(self):
-        html = '<html><body><pagevault><div>Hello</div></pagevault></body></html>'
+        html = "<html><body><pagevault><div>Hello</div></pagevault></body></html>"
         locked = lock_html(html, password="test")
         unlocked = unlock_html(locked, password="test")
         assert "<div>Hello</div>" in unlocked
 
     def test_empty_script_tag(self):
-        html = '<html><body><pagevault><script></script></pagevault></body></html>'
+        html = "<html><body><pagevault><script></script></pagevault></body></html>"
         locked = lock_html(html, password="test")
         unlocked = unlock_html(locked, password="test")
         assert "script" in unlocked

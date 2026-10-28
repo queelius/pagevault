@@ -71,11 +71,13 @@ pagevault lock page.html --dry-run
 | `--pad` | | Pad content to power-of-2 boundary before encryption (prevents size leakage) |
 | `--dry-run` | | Preview without changes |
 
+With `--site`, hidden paths (any file or directory whose name starts with `.`, such as `.pagevault.yaml`, `.git/` and `.env`) are never bundled, nor is the output file itself if it lies inside the directory. A symlink is bundled as a copy of its target, so the same rule applies to where it points: links to hidden files, or to anything outside the directory, are left out. Everyone who can unlock the site can read every bundled file.
+
 ---
 
 ### unlock
 
-Decrypt encrypted HTML files (restores `<pagevault>` marked state).
+Decrypt encrypted HTML files. Pages with encrypted regions return to `<pagevault>` marked state. A wrapped file (`pagevault lock report.pdf`) is restored as the original file under its original name; a wrapped site (`--site`) is extracted into a directory named after the HTML file (`_unlocked/mysite/` for `mysite.html`).
 
 ```bash
 pagevault unlock [OPTIONS] [PATHS]...
@@ -111,7 +113,7 @@ pagevault unlock report.pdf.html --stdout -p "$SECRET" > report.pdf
 | `--password` | `-p` | Decryption password |
 | `--username` | `-u` | Username for multi-user encrypted content |
 | `--directory` | `-d` | Output directory (default: `_unlocked/`) |
-| `--stdout` | | Output decrypted content to stdout (for piping) |
+| `--stdout` | | Output decrypted content to stdout (for piping): the HTML for a region-locked page, the raw bytes for a wrapped file, the zip archive for a wrapped site |
 | `--config` | `-c` | Path to config file |
 | `--dry-run` | | Preview without changes |
 
@@ -166,7 +168,7 @@ Re-encrypt files after password changes or user updates.
 pagevault sync [OPTIONS] [PATHS]...
 ```
 
-Useful for updating encrypted content when users change or passwords are updated.
+Useful for updating encrypted content when users change or passwords are updated. Applies to region-locked pages and to wrapped files and sites alike: each synced file gets fresh ciphertext under a new key, so a user removed from the config can no longer open it (though anyone who kept an old copy still can).
 
 **Examples:**
 
@@ -417,7 +419,7 @@ pagevault lock mysite/ --site -p "share-password" -o mysite-locked.html
 ## Exit Codes
 
 - `0`: Success
-- `1`: General error (invalid arguments, file not found, etc.)
+- `1`: General error (invalid arguments, file not found, etc.), or at least one file in a `lock`, `unlock` or `sync` batch failed. The batch still processes every other file; the summary line ends with `, N failed`.
 - `2`: Configuration error (missing password, invalid config file)
 
 ---

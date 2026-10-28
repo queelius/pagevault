@@ -15,22 +15,13 @@ import pytest
 
 from pagevault.parser import lock_html
 
-playwright = pytest.importorskip("playwright.sync_api")
+pytest.importorskip("playwright.sync_api")
 
 
 # Use string indirection so security hook does not flag this file.
 # These are the Python-side names for browser globals we test against.
 _DOC_WRITE = "document." + "write"
 _WRITE_CALL = _DOC_WRITE + "('<p>this should not appear</p>')"
-
-
-@pytest.fixture(scope="module")
-def browser():
-    """Module-scoped Chromium instance."""
-    with playwright.sync_playwright() as p:
-        b = p.chromium.launch()
-        yield b
-        b.close()
 
 
 @pytest.fixture
@@ -87,9 +78,7 @@ class TestInlineScriptExecutes:
         """)
         url = _write_locked(tmp_path, html)
         _decrypt_in_browser(page, url)
-        page.wait_for_function(
-            "document.getElementById('out').textContent === 'ran'"
-        )
+        page.wait_for_function("document.getElementById('out').textContent === 'ran'")
         assert page.locator("#out").text_content() == "ran"
 
     def test_inline_script_can_set_window_global(self, tmp_path, page):
@@ -166,9 +155,7 @@ class TestWindowOnloadNotRefired:
         """)
         url = _write_locked(tmp_path, html)
         _decrypt_in_browser(page, url)
-        page.wait_for_function(
-            "document.querySelector('pagevault')._pvDecrypted"
-        )
+        page.wait_for_function("document.querySelector('pagevault')._pvDecrypted")
         page.wait_for_timeout(150)  # let any spurious onload fire
         count = page.evaluate("window.__pvHostOnloadCount")
         assert count == 1, f"Host onload should fire exactly once, got {count}"
@@ -230,9 +217,7 @@ class TestExecutionOrder:
         """)
         url = _write_locked(tmp_path, html)
         _decrypt_in_browser(page, url)
-        page.wait_for_function(
-            "window.__pvOrder && window.__pvOrder.length === 3"
-        )
+        page.wait_for_function("window.__pvOrder && window.__pvOrder.length === 3")
         assert page.evaluate("window.__pvOrder") == [1, 2, 3]
 
 
@@ -260,9 +245,7 @@ class TestEventDispatch:
         """)
         url = _write_locked(tmp_path, html)
         _decrypt_in_browser(page, url)
-        page.wait_for_function(
-            "window.__pvEvents && window.__pvEvents.length >= 2"
-        )
+        page.wait_for_function("window.__pvEvents && window.__pvEvents.length >= 2")
         events = page.evaluate("window.__pvEvents")
         assert "decrypted" in events
         assert "activated" in events
