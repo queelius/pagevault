@@ -1,5 +1,6 @@
 """Tests for pagevault.cli module."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -2962,6 +2963,22 @@ users:
 
         assert "bob" in result.output
         assert "WEAK" in result.output
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only")
+    def test_audit_flags_config_readable_by_others(self, runner, tmp_path):
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text('password: "very-strong-passphrase-2024!"\n')
+        (tmp_path / ".gitignore").write_text(".pagevault.yaml\n")
+
+        config_path.chmod(0o644)
+        result = runner.invoke(main, ["audit", "-c", str(config_path)])
+        assert result.exit_code == 1
+        assert "readable by other users (mode 644)" in result.output
+
+        config_path.chmod(0o600)
+        result = runner.invoke(main, ["audit", "-c", str(config_path)])
+        assert "readable by other users" not in result.output
+        assert "private to its owner" in result.output
 
 
 class TestUnlockStdout:

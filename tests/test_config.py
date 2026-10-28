@@ -1,5 +1,8 @@
 """Tests for pagevault.config module."""
 
+import os
+import stat
+
 import pytest
 import yaml
 
@@ -859,3 +862,68 @@ class TestConfigToDictShowPasswords:
         data = config_to_dict(config)
         assert data["password"] == "se***"
         assert data["users"]["alice"] == "al***"
+
+
+class TestCredentialFileModes:
+    """Every writer of a password-bearing config leaves it owner-only."""
+
+    pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only")
+
+    @staticmethod
+    def _mode(path):
+        return stat.S_IMODE(path.stat().st_mode)
+
+    @pytest.fixture(autouse=True)
+    def permissive_umask(self):
+        # The writers must not lean on a strict umask.
+        old = os.umask(0o022)
+        yield
+        os.umask(old)
+
+    def test_create_default_config(self, tmp_path):
+        path = create_default_config(tmp_path)
+        assert self._mode(path) == 0o600
+
+    def test_create_global_config_and_dir(self):
+        path = create_global_config(users={"alice": "pw-alice"})
+        assert self._mode(path) == 0o600
+        assert self._mode(path.parent) == 0o700
+
+    def test_update_tightens_existing_file(self, tmp_path):
+        path = tmp_path / CONFIG_FILENAME
+        path.write_text('password: "pw"\n')
+        path.chmod(0o644)
+
+        update_config_users(path, {"alice": "pw-alice"})
+
+        assert self._mode(path) == 0o600
+        assert yaml.safe_load(path.read_text())["users"] == {"alice": "pw-alice"}
+
+    def test_cli_user_add_and_config_set(self, tmp_path):
+        from click.testing import CliRunner
+
+        from pagevault.cli import main
+
+        path = tmp_path / CONFIG_FILENAME
+        path.write_text('password: "pw"\n')
+        path.chmod(0o644)
+        runner = CliRunner()
+
+        result = runner.invoke(
+            main,
+            ["config", "user", "add", "bob", "-p", "pw-bob", "-c", str(path)],
+        )
+        assert result.exit_code == 0, result.output
+        assert self._mode(path) == 0o600
+
+        path.chmod(0o644)
+        result = runner.invoke(main, ["config", "set", "pad", "true", "-c", str(path)])
+        assert result.exit_code == 0, result.output
+        assert self._mode(path) == 0o600
+
+        create_global_config(users={"alice": "pw-alice"}).chmod(0o644)
+        result = runner.invoke(
+            main, ["config", "user", "add", "carol", "-p", "pw-carol", "--global"]
+        )
+        assert result.exit_code == 0, result.output
+        assert self._mode(get_global_config_path()) == 0o600

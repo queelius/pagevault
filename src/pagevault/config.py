@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 
+from ._fs import atomic_write
 from .crypto import PagevaultError, generate_salt, hex_to_salt, salt_to_hex
 
 CONFIG_FILENAME = ".pagevault.yaml"
@@ -24,6 +25,20 @@ ENV_SALT = "PAGEVAULT_SALT"
 # arbitrary local files into its output (css_file). Honored only from a
 # trusted config; see _is_trusted_location().
 PATH_BEARING_KEYS = ("viewers_dir", "css_file")
+
+# Config files hold passwords, so pagevault writes them readable by their
+# owner only, and creates the global config's directory the same way.
+CREDENTIAL_FILE_MODE = 0o600
+CREDENTIAL_DIR_MODE = 0o700
+
+LOCAL_CONFIG_HEADER = (
+    "# pagevault configuration\n"
+    "# WARNING: Add this file to .gitignore - it contains passwords!\n\n"
+)
+GLOBAL_CONFIG_HEADER = (
+    "# pagevault global configuration\n"
+    "# Personal credentials merged into every project's config.\n\n"
+)
 
 
 @dataclass
@@ -481,12 +496,36 @@ template:
   color_secondary: "#76B852"
 '''
 
-    try:
-        config_path.write_text(config_content)
-    except OSError as e:
-        raise PagevaultError(f"Cannot write config file: {e}") from e
-
+    _write_credential_file(config_path, config_content)
     return config_path
+
+
+def _write_credential_file(path: Path, content: str) -> None:
+    """Atomically write a file that holds passwords, readable by its owner only."""
+    try:
+        atomic_write(path, content, mode=CREDENTIAL_FILE_MODE)
+    except OSError as e:
+        raise PagevaultError(f"Cannot write config file {path}: {e}") from e
+
+
+def write_config_file(path: Path, data: dict[str, Any], header: str) -> None:
+    """Write config ``data`` as YAML under ``header``, owner-readable only.
+
+    Comments other than the header are not preserved.
+    """
+    content = header + yaml.dump(data, default_flow_style=False, sort_keys=False)
+    _write_credential_file(path, content)
+
+
+def write_global_config(data: dict[str, Any]) -> Path:
+    """Write the global config, creating its directory owner-only if needed."""
+    path = get_global_config_path()
+    try:
+        path.parent.mkdir(mode=CREDENTIAL_DIR_MODE, parents=True, exist_ok=True)
+    except OSError as e:
+        raise PagevaultError(f"Cannot create {path.parent}: {e}") from e
+    write_config_file(path, data, GLOBAL_CONFIG_HEADER)
+    return path
 
 
 def create_global_config(
@@ -522,18 +561,7 @@ def create_global_config(
     if default_user:
         data["user"] = default_user
 
-    global_path.parent.mkdir(parents=True, exist_ok=True)
-
-    content = "# pagevault global configuration\n"
-    content += "# Personal credentials merged into every project's config.\n\n"
-    content += yaml.dump(data, default_flow_style=False, sort_keys=False)
-
-    try:
-        global_path.write_text(content, encoding="utf-8")
-    except OSError as e:
-        raise PagevaultError(f"Cannot write global config: {e}") from e
-
-    return global_path
+    return write_global_config(data)
 
 
 def update_config_users(config_path: Path, users: dict[str, str] | None) -> None:
@@ -562,14 +590,7 @@ def update_config_users(config_path: Path, users: dict[str, str] | None) -> None
     elif "users" in data:
         del data["users"]
 
-    content = "# pagevault configuration\n"
-    content += "# WARNING: Add this file to .gitignore - it contains passwords!\n\n"
-    content += yaml.dump(data, default_flow_style=False, sort_keys=False)
-
-    try:
-        config_path.write_text(content)
-    except OSError as e:
-        raise PagevaultError(f"Cannot write config file {config_path}: {e}") from e
+    write_config_file(config_path, data, LOCAL_CONFIG_HEADER)
 
 
 def config_to_dict(

@@ -10,8 +10,11 @@ import yaml
 
 from pagevault._fs import atomic_write
 from pagevault.config import (
+    LOCAL_CONFIG_HEADER,
     find_config_file,
     get_global_config_path,
+    write_config_file,
+    write_global_config,
 )
 from pagevault.crypto import PagevaultError
 from pagevault.parser import (
@@ -825,20 +828,12 @@ def _load_raw_config(
 
 def _save_local(path: Path, data: dict) -> None:
     """Write data back to a local config file."""
-    content = "# pagevault configuration\n"
-    content += "# WARNING: Add this file to .gitignore - it contains passwords!\n\n"
-    content += yaml.dump(data, default_flow_style=False, sort_keys=False)
-    path.write_text(content, encoding="utf-8")
+    write_config_file(path, data, LOCAL_CONFIG_HEADER)
 
 
 def _save_global(data: dict) -> None:
     """Write data back to global config."""
-    path = get_global_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    content = "# pagevault global configuration\n"
-    content += "# Personal credentials merged into every project's config.\n\n"
-    content += yaml.dump(data, default_flow_style=False, sort_keys=False)
-    path.write_text(content, encoding="utf-8")
+    write_global_config(data)
 
 
 def _init_global(force: bool) -> None:

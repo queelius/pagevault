@@ -62,3 +62,14 @@ def test_existing_file_keeps_its_mode(tmp_path):
     atomic_write(target, "y")
 
     assert _mode(target) == 0o640
+
+
+def test_explicit_mode_overrides_existing(tmp_path):
+    target = tmp_path / "secret.yaml"
+    target.write_text("old")
+    target.chmod(0o644)
+
+    atomic_write(target, "new", mode=0o600)
+
+    assert target.read_text() == "new"
+    assert _mode(target) == 0o600

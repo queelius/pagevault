@@ -14,22 +14,26 @@ def _default_mode() -> int:
     return 0o666 & ~umask
 
 
-def atomic_write(path: Path, data: str | bytes) -> None:
+def atomic_write(path: Path, data: str | bytes, mode: int | None = None) -> None:
     """Write ``data`` to ``path`` so it is never seen partially written.
 
     The data goes to a temporary file in the same directory, which is then
     renamed over ``path``. An interrupted or failed write leaves the old
     file (or no file) in place rather than a truncated one, which matters
     when ``path`` is the only copy (sync, mark) or a deploy directory.
-    Text is written as UTF-8. The result keeps an existing file's mode;
-    a new file gets the usual umask-derived mode, not mkstemp's 0600.
+    Text is written as UTF-8. Without ``mode``, the result keeps an existing
+    file's mode and a new file gets the usual umask-derived mode, not
+    mkstemp's 0600. Pass ``mode`` (e.g. 0o600 for a file holding passwords)
+    to set it outright; the data is never readable under a wider mode,
+    since the temporary file starts as 0600.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        mode = stat.S_IMODE(path.stat().st_mode)
-    except FileNotFoundError:
-        mode = _default_mode()
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            mode = _default_mode()
 
     # A short fixed prefix: deriving it from path.name would push names near
     # the filesystem's length limit (255 bytes) over it.
