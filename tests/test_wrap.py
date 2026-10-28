@@ -957,9 +957,7 @@ class TestWrapFileViewers:
             ("doc.pdf", b"%PDF-1.4" + b"\x00" * 50, "application/pdf"),
         ],
     )
-    def test_viewer_in_dispatch_table(
-        self, tmp_path, filename, content, mime_pattern
-    ):
+    def test_viewer_in_dispatch_table(self, tmp_path, filename, content, mime_pattern):
         """Each MIME type's viewer registers in window.__pv_viewers."""
         f = tmp_path / filename
         f.write_bytes(content)
@@ -1476,6 +1474,7 @@ class TestV3PaddingStrip:
     def test_v4_renderer_truncates_blob_to_meta_size(self):
         """v4 renderer JS should truncate blob using meta.size after decryption."""
         from pagevault.wrap import _get_renderer_js_v4
+
         js = _get_renderer_js_v4([])
         assert "meta.size" in js
         assert ".slice(" in js or "slice(0" in js
@@ -1483,6 +1482,7 @@ class TestV3PaddingStrip:
     def test_v4_renderer_has_padding_comment(self):
         """v4 renderer should document the padding strip."""
         from pagevault.wrap import _get_renderer_js_v4
+
         js = _get_renderer_js_v4([])
         assert "padding" in js.lower() or "pad" in js.lower()
 
@@ -1493,12 +1493,14 @@ class TestResolvePathAbsolute:
     def test_resolve_path_handles_absolute_path(self):
         """Site renderer resolvePath should strip leading / for absolute paths."""
         from pagevault.wrap import _get_site_renderer_js
+
         js = _get_site_renderer_js()
         assert "href.startsWith('/')" in js
 
     def test_site_with_absolute_paths_wraps(self, tmp_path):
         """A site using root-relative paths should wrap successfully."""
         from pagevault.wrap import wrap_site
+
         site_dir = tmp_path / "site"
         site_dir.mkdir()
         img_dir = site_dir / "images"
@@ -1518,6 +1520,7 @@ class TestSrcsetRewriting:
     def test_srcset_handling_in_renderer(self):
         """Site renderer should have special srcset handling."""
         from pagevault.wrap import _get_site_renderer_js
+
         js = _get_site_renderer_js()
         assert "srcset" in js.lower()
         # Should split srcset entries on comma and process each URL
@@ -1530,6 +1533,7 @@ class TestCssImportRewriting:
     def test_css_import_bare_string_pattern(self):
         """Site renderer should rewrite @import 'file.css' bare string syntax."""
         from pagevault.wrap import _get_site_renderer_js
+
         js = _get_site_renderer_js()
         assert "@import" in js
 
@@ -1540,12 +1544,14 @@ class TestNavInterceptor:
     def test_form_submit_interceptor_present(self):
         """Nav script should intercept form submissions."""
         from pagevault.wrap import _get_site_renderer_js
+
         js = _get_site_renderer_js()
         assert '"submit"' in js
 
     def test_target_blank_not_intercepted(self):
         """Nav script should skip links with target=_blank."""
         from pagevault.wrap import _get_site_renderer_js
+
         js = _get_site_renderer_js()
         assert "_blank" in js
 
@@ -1556,18 +1562,21 @@ class TestFetchInterception:
     def test_fetch_shim_injected(self):
         """Site renderer should inject a fetch shim into the iframe."""
         from pagevault.wrap import _get_site_renderer_js
+
         js = _get_site_renderer_js()
         assert "pagevault-fetch" in js
 
     def test_parent_responds_to_fetch_requests(self):
         """Parent should handle pagevault-fetch-response messages."""
         from pagevault.wrap import _get_site_renderer_js
+
         js = _get_site_renderer_js()
         assert "pagevault-fetch-response" in js
 
     def test_fetch_shim_preserves_absolute_urls(self):
         """Fetch shim should not intercept absolute URLs."""
         from pagevault.wrap import _get_site_renderer_js
+
         js = _get_site_renderer_js()
         # The shim should check for http/https/data/blob prefixes
         assert "https?:" in js or "http" in js
@@ -1577,5 +1586,6 @@ class TestFetchInterception:
         to reject forged messages from other frames (defense-in-depth under
         HTTP-served sites; moot under file:// where all origins are opaque)."""
         from pagevault.wrap import _get_site_renderer_js
+
         js = _get_site_renderer_js()
         assert "e.source !== _site_iframe.contentWindow" in js

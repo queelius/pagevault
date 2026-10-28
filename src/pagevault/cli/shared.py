@@ -156,16 +156,12 @@ def _exclude_under_output_dir(
     return kept
 
 
-def _resolve_managed_html_files(
-    config_dir: Path, patterns: list[str]
-) -> list[Path]:
+def _resolve_managed_html_files(config_dir: Path, patterns: list[str]) -> list[Path]:
     """Expand managed glob patterns (relative to config_dir) to HTML files."""
     files: list[Path] = []
     for pattern in patterns:
         files.extend(
-            f
-            for f in sorted(config_dir.glob(pattern))
-            if f.is_file() and _is_html(f)
+            f for f in sorted(config_dir.glob(pattern)) if f.is_file() and _is_html(f)
         )
     return sorted(set(files))
 
@@ -565,9 +561,7 @@ def _find_first_envelope(soup) -> dict | None:
             try:
                 return json.loads(child.string)
             except json.JSONDecodeError as e:
-                raise click.ClickException(
-                    f"Invalid region envelope JSON: {e}"
-                ) from e
+                raise click.ClickException(f"Invalid region envelope JSON: {e}") from e
     return None
 
 
@@ -860,9 +854,7 @@ def _init_global(force: bool) -> None:
             f"Username '{username}' cannot contain ':' (used as delimiter)."
         )
 
-    user_password = click.prompt(
-        "Password", hide_input=True, confirmation_prompt=True
-    )
+    user_password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
     if not user_password:
         raise click.ClickException("Password cannot be empty.")
 

@@ -671,9 +671,7 @@ class TestGlobalConfig:
 
     def test_local_user_overrides_global(self, tmp_path, monkeypatch):
         """When same username in both, local password wins."""
-        self._setup_global(
-            tmp_path, monkeypatch, users={"alice": "global-password"}
-        )
+        self._setup_global(tmp_path, monkeypatch, users={"alice": "global-password"})
         local = self._create_local(
             tmp_path, password="test", users={"alice": "local-password"}
         )
@@ -700,7 +698,8 @@ class TestGlobalConfig:
     def test_global_default_user(self, tmp_path, monkeypatch):
         """Global default user is used as fallback."""
         self._setup_global(
-            tmp_path, monkeypatch,
+            tmp_path,
+            monkeypatch,
             users={"alice": "pass"},
             user="alice",
         )
@@ -727,9 +726,7 @@ class TestGlobalConfig:
 
     def test_password_conflict_warning(self, tmp_path, monkeypatch, capsys):
         """Warns when same user has different passwords in global and local."""
-        self._setup_global(
-            tmp_path, monkeypatch, users={"alice": "global-pw"}
-        )
+        self._setup_global(tmp_path, monkeypatch, users={"alice": "global-pw"})
         local = self._create_local(
             tmp_path, password="test", users={"alice": "local-pw"}
         )
@@ -741,9 +738,7 @@ class TestGlobalConfig:
 
     def test_no_warning_same_password(self, tmp_path, monkeypatch, capsys):
         """No warning when same user has same password in both."""
-        self._setup_global(
-            tmp_path, monkeypatch, users={"alice": "same-pw"}
-        )
+        self._setup_global(tmp_path, monkeypatch, users={"alice": "same-pw"})
         local = self._create_local(
             tmp_path, password="test", users={"alice": "same-pw"}
         )
@@ -756,7 +751,8 @@ class TestGlobalConfig:
         """Global salt is used when local config has no salt."""
         salt_hex = "0123456789abcdef0123456789abcdef"
         self._setup_global(
-            tmp_path, monkeypatch,
+            tmp_path,
+            monkeypatch,
             password="test",
             extra={"salt": salt_hex},
         )
@@ -776,7 +772,8 @@ class TestGlobalConfig:
         global_salt = "abcdef0123456789abcdef0123456789"
         local_salt = "0123456789abcdef0123456789abcdef"
         self._setup_global(
-            tmp_path, monkeypatch,
+            tmp_path,
+            monkeypatch,
             password="test",
             extra={"salt": global_salt},
         )
@@ -788,7 +785,8 @@ class TestGlobalConfig:
     def test_global_config_full_structure(self, tmp_path, monkeypatch):
         """Global config can have full structure (same as local)."""
         self._setup_global(
-            tmp_path, monkeypatch,
+            tmp_path,
+            monkeypatch,
             password="global-pass",
             users={"alice": "pw"},
             extra={
@@ -842,9 +840,7 @@ class TestCreateGlobalConfig:
         config_home.mkdir()
         monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
 
-        create_global_config(
-            users={"alice": "pass"}, default_user="alice"
-        )
+        create_global_config(users={"alice": "pass"}, default_user="alice")
         data = yaml.safe_load(get_global_config_path().read_text())
         assert data["user"] == "alice"
 
@@ -853,17 +849,13 @@ class TestConfigToDictShowPasswords:
     """Tests for config_to_dict show_passwords parameter."""
 
     def test_show_passwords_reveals_all(self):
-        config = PagevaultConfig(
-            password="secret", users={"alice": "alice-pass"}
-        )
+        config = PagevaultConfig(password="secret", users={"alice": "alice-pass"})
         data = config_to_dict(config, show_passwords=True)
         assert data["password"] == "secret"
         assert data["users"]["alice"] == "alice-pass"
 
     def test_default_masks_passwords(self):
-        config = PagevaultConfig(
-            password="secret", users={"alice": "alice-pass"}
-        )
+        config = PagevaultConfig(password="secret", users={"alice": "alice-pass"})
         data = config_to_dict(config)
         assert data["password"] == "se***"
         assert data["users"]["alice"] == "al***"

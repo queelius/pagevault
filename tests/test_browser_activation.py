@@ -78,9 +78,7 @@ class TestInlineScriptExecutes:
         """)
         url = _write_locked(tmp_path, html)
         _decrypt_in_browser(page, url)
-        page.wait_for_function(
-            "document.getElementById('out').textContent === 'ran'"
-        )
+        page.wait_for_function("document.getElementById('out').textContent === 'ran'")
         assert page.locator("#out").text_content() == "ran"
 
     def test_inline_script_can_set_window_global(self, tmp_path, page):
@@ -157,9 +155,7 @@ class TestWindowOnloadNotRefired:
         """)
         url = _write_locked(tmp_path, html)
         _decrypt_in_browser(page, url)
-        page.wait_for_function(
-            "document.querySelector('pagevault')._pvDecrypted"
-        )
+        page.wait_for_function("document.querySelector('pagevault')._pvDecrypted")
         page.wait_for_timeout(150)  # let any spurious onload fire
         count = page.evaluate("window.__pvHostOnloadCount")
         assert count == 1, f"Host onload should fire exactly once, got {count}"
@@ -221,9 +217,7 @@ class TestExecutionOrder:
         """)
         url = _write_locked(tmp_path, html)
         _decrypt_in_browser(page, url)
-        page.wait_for_function(
-            "window.__pvOrder && window.__pvOrder.length === 3"
-        )
+        page.wait_for_function("window.__pvOrder && window.__pvOrder.length === 3")
         assert page.evaluate("window.__pvOrder") == [1, 2, 3]
 
 
@@ -251,9 +245,7 @@ class TestEventDispatch:
         """)
         url = _write_locked(tmp_path, html)
         _decrypt_in_browser(page, url)
-        page.wait_for_function(
-            "window.__pvEvents && window.__pvEvents.length >= 2"
-        )
+        page.wait_for_function("window.__pvEvents && window.__pvEvents.length >= 2")
         events = page.evaluate("window.__pvEvents")
         assert "decrypted" in events
         assert "activated" in events

@@ -278,7 +278,9 @@ def lock_html(
         }
 
     encrypted_any = False
-    had_encrypted = False  # Tracks pre-existing encrypted elements (for runtime injection)
+    had_encrypted = (
+        False  # Tracks pre-existing encrypted elements (for runtime injection)
+    )
 
     for element in elements:
         # Skip already-encrypted elements — preserving their ciphertext.
@@ -454,10 +456,10 @@ def unlock_html(
         # parser.py) fall back to string-level rstrip; that path silently
         # eats any plaintext that legitimately ended in NULs, but is
         # required for backward compatibility with files in the wild.
-        original_size = (
-            dec_meta.get("size") if isinstance(dec_meta, dict) else None
-        )
-        if isinstance(original_size, int) and 0 <= original_size <= len(plaintext_bytes):
+        original_size = dec_meta.get("size") if isinstance(dec_meta, dict) else None
+        if isinstance(original_size, int) and 0 <= original_size <= len(
+            plaintext_bytes
+        ):
             plaintext_bytes = plaintext_bytes[:original_size]
             try:
                 decrypted_content = plaintext_bytes.decode("utf-8")
@@ -475,7 +477,9 @@ def unlock_html(
             decrypted_content = decrypted_content.rstrip("\x00")
 
         # Verify content_hash if present in metadata
-        expected_hash = dec_meta.get("content_hash") if isinstance(dec_meta, dict) else None
+        expected_hash = (
+            dec_meta.get("content_hash") if isinstance(dec_meta, dict) else None
+        )
         if expected_hash:
             actual_hash = content_hash(decrypted_content)
             if actual_hash != expected_hash:
@@ -608,7 +612,9 @@ def sync_html_keys(
                     f"Cannot recover CEK: no valid old credentials ({e})"
                 ) from e
         else:
-            raise PagevaultError("Must provide old_password or old_users to recover CEK")
+            raise PagevaultError(
+                "Must provide old_password or old_users to recover CEK"
+            )
 
         if recovered_pt is None:
             raise PagevaultError("Cannot recover CEK: no valid old credentials")
@@ -836,7 +842,6 @@ pagevault[data-pv-v4] {{
   .pagevault-remember {{ color: #999; }}
 }}
 """
-
 
 
 def _get_javascript(template: TemplateConfig, defaults: DefaultsConfig) -> str:

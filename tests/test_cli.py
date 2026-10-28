@@ -697,9 +697,15 @@ class TestSelectorLock:
 
         content = (output_dir / "index.html").read_text()
         from bs4 import BeautifulSoup
-        assert len(BeautifulSoup(content, "html.parser").find_all(
-            "pagevault", attrs={"data-pv-v4": True}
-        )) == 2
+
+        assert (
+            len(
+                BeautifulSoup(content, "html.parser").find_all(
+                    "pagevault", attrs={"data-pv-v4": True}
+                )
+            )
+            == 2
+        )
         assert "Secret content here" not in content
         assert "Private section" not in content
 
@@ -929,9 +935,15 @@ class TestSelectorLock:
         # Final file should have both sections locked
         content = (pass2_dir / "index.html").read_text()
         from bs4 import BeautifulSoup
-        assert len(BeautifulSoup(content, "html.parser").find_all(
-            "pagevault", attrs={"data-pv-v4": True}
-        )) == 2
+
+        assert (
+            len(
+                BeautifulSoup(content, "html.parser").find_all(
+                    "pagevault", attrs={"data-pv-v4": True}
+                )
+            )
+            == 2
+        )
         assert "Admin content" not in content
         assert "Member content" not in content
         assert 'data-title="Admin Area"' in content
@@ -2634,9 +2646,7 @@ salt: "0123456789abcdef0123456789abcdef"
             ["lock", str(html_path), "-c", str(config_path), "-d", str(locked_dir)],
         )
 
-        result = runner.invoke(
-            main, ["inspect", str(locked_dir / "index.html")]
-        )
+        result = runner.invoke(main, ["inspect", str(locked_dir / "index.html")])
 
         assert result.exit_code == 0
         assert "Encrypted regions: 1" in result.output
@@ -2672,9 +2682,7 @@ users:
             ["lock", str(html_path), "-c", str(config_path), "-d", str(locked_dir)],
         )
 
-        result = runner.invoke(
-            main, ["inspect", str(locked_dir / "index.html")]
-        )
+        result = runner.invoke(main, ["inspect", str(locked_dir / "index.html")])
 
         assert result.exit_code == 0
         assert "Key blobs:    2" in result.output
@@ -2685,9 +2693,7 @@ users:
         html_path = tmp_path / "plain.html"
         html_path.write_text("<html><body>Hello</body></html>")
 
-        result = runner.invoke(
-            main, ["inspect", str(html_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(html_path)])
 
         assert result.exit_code != 0
         assert "no pagevault elements" in result.output.lower()
@@ -2706,9 +2712,7 @@ users:
         )
         assert result.exit_code == 0
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
 
         assert result.exit_code == 0
         assert "v4 chunked" in result.output
@@ -2728,15 +2732,13 @@ users:
         src = tmp_path / "data.txt"
         src.write_text("payload")
         wrapped = tmp_path / "data.html"
-        result = runner.invoke(
-            main, ["lock", str(src), "-p", "pw", "-o", str(wrapped)]
-        )
+        result = runner.invoke(main, ["lock", str(src), "-p", "pw", "-o", str(wrapped)])
         assert result.exit_code == 0
 
         # Splice a synthetic region envelope into the wrapped file.
         content = wrapped.read_text(encoding="utf-8")
         synthetic_region = (
-            '<pagevault data-pv-v4>'
+            "<pagevault data-pv-v4>"
             '<script data-pv-meta type="x-pv">{"unused":true}</script>'
             '<script type="x-pv" data-pv-chunk="0">x</script>'
             "</pagevault>"
@@ -2783,8 +2785,11 @@ salt: "0123456789abcdef0123456789abcdef"
         result = runner.invoke(
             main,
             [
-                "inspect", str(locked_dir / "index.html"),
-                "-p", "test-password", "--check",
+                "inspect",
+                str(locked_dir / "index.html"),
+                "-p",
+                "test-password",
+                "--check",
             ],
         )
 
@@ -2812,8 +2817,11 @@ salt: "0123456789abcdef0123456789abcdef"
         result = runner.invoke(
             main,
             [
-                "inspect", str(locked_dir / "index.html"),
-                "-p", "wrong-password", "--check",
+                "inspect",
+                str(locked_dir / "index.html"),
+                "-p",
+                "wrong-password",
+                "--check",
             ],
         )
 
@@ -3500,9 +3508,7 @@ class TestInfoV4:
         )
         assert result.exit_code == 0
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "v4 chunked" in result.output
         assert "Chunks:" in result.output
@@ -3518,9 +3524,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "aes-256-gcm" in result.output
         assert "pbkdf2-sha256" in result.output
@@ -3534,9 +3538,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Content hash:" not in result.output
 
@@ -3548,9 +3550,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Runtime scripts:" in result.output
         assert "Runtime styles:" in result.output
@@ -3564,9 +3564,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Version:        v4" in result.output
 
@@ -3578,9 +3576,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Chunk tags:" in result.output
 
@@ -3594,9 +3590,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(big_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Chunks:         3" in result.output
         assert "Chunk tags:     3" in result.output
@@ -3626,9 +3620,7 @@ class TestInfoV4:
         )
         assert result.exit_code == 0
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "v4 chunked" in result.output
 
@@ -3871,8 +3863,13 @@ class TestUsersFilter:
         check_result = runner.invoke(
             main,
             [
-                "inspect", str(locked_dir / "index.html"),
-                "-p", "pw-a", "-u", "alice", "--check",
+                "inspect",
+                str(locked_dir / "index.html"),
+                "-p",
+                "pw-a",
+                "-u",
+                "alice",
+                "--check",
             ],
         )
         assert "correct" in check_result.output.lower()
@@ -3881,8 +3878,13 @@ class TestUsersFilter:
         check_result = runner.invoke(
             main,
             [
-                "inspect", str(locked_dir / "index.html"),
-                "-p", "pw-c", "-u", "charlie", "--check",
+                "inspect",
+                str(locked_dir / "index.html"),
+                "-p",
+                "pw-c",
+                "-u",
+                "charlie",
+                "--check",
             ],
         )
         assert "incorrect" in check_result.output.lower()

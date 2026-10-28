@@ -842,5 +842,3 @@ def _get_site_renderer_js() -> str:
     from .runtime import build_wrap_js
 
     return build_wrap_js(include_jszip=True, is_site=True)
-
-
