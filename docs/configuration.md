@@ -77,12 +77,15 @@ salt: "0123456789abcdef0123456789abcdef"
 
 #### `defaults.remember`
 
-How long to remember the password in the browser:
+Whether the browser may remember an unlocked page, so it reopens without a prompt:
 
 - `"none"`: Don't remember (always prompt)
-- `"session"`: Remember for current browser session only
-- `"local"`: Remember permanently (localStorage)
-- `"ask"`: Ask user each time (default)
+- `"session"`: Remember in this tab until it closes
+- `"local"`: Remember on this device (until `remember_days` runs out)
+- `"ask"`: Offer a "Remember on this device" checkbox (default)
+
+The browser never stores the password itself, only the key it derives for
+this config's salt. See [Security](security.md#remembered-passwords).
 
 ```yaml
 defaults:
@@ -91,7 +94,7 @@ defaults:
 
 #### `defaults.remember_days`
 
-For `remember: "local"`, how many days to store the password. `0` = indefinite.
+For `remember: "local"` (or a ticked checkbox), how many days the browser remembers it. `0` = indefinite.
 
 ```yaml
 defaults:
@@ -262,6 +265,11 @@ And command-line flag: `-p "cli-password"`
 ```
 
 Your configuration contains passwords. Don't commit them to version control.
+
+pagevault writes config files (`config init`, `config set`, `config user ...`)
+readable by their owner only (mode 600), and the global config's directory
+mode 700. A file created some other way keeps its mode until pagevault next
+writes it; `pagevault audit` reports one that other users can read.
 
 ## Finding Your Config File
 

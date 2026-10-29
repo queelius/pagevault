@@ -29,7 +29,7 @@ Mark sections with `<pagevault>` tags. pagevault encrypts just those sections wh
 <footer>Public footer</footer>
 ```
 
-Visitors see your site normally. When they encounter protected content, a password prompt appears. Once unlocked, the content displays beautifully—and the password can be remembered in the browser (you control this).
+Visitors see your site normally. When they encounter protected content, a password prompt appears. Once unlocked, the content displays beautifully—and the browser can remember it without storing the password (you control this).
 
 ## Quick Start
 
@@ -78,7 +78,7 @@ That's it! Visitors see a password prompt on protected sections.
 ### For Content Creators
 - **Selective encryption**: Mark just what needs protecting
 - **HTML structure preserved**: Navigation, scripts, styles stay public
-- **Remember-me**: Visitors can save passwords in browser
+- **Remember-me**: Visitors can skip the prompt on return visits
 - **Viewer plugins**: Built-in rendering for images, PDFs, HTML, text, and Markdown
 
 ### For Developers

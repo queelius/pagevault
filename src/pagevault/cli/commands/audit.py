@@ -2,11 +2,12 @@
 
 import math
 import os
+import stat
 from pathlib import Path
 
 import click
 
-from pagevault.config import load_config
+from pagevault.config import get_global_config_path, load_config
 from pagevault.crypto import PagevaultError
 from pagevault.parser import _parse_html, has_pagevault_elements
 
@@ -126,6 +127,24 @@ def audit(config_path):
                 )
         else:
             warnings.append("No .gitignore found in config directory")
+
+    # Config files hold passwords: they should not be readable by other users.
+    # (POSIX modes only; Windows reports them meaninglessly.)
+    if os.name == "posix":
+        global_path = get_global_config_path()
+        credential_files = [
+            cfg.config_path,
+            global_path if global_path.is_file() else None,
+        ]
+        for path in dict.fromkeys(p.resolve() for p in credential_files if p):
+            mode = stat.S_IMODE(path.stat().st_mode)
+            if mode & 0o077:
+                issues.append(
+                    f"{path} is readable by other users (mode {mode:o}); "
+                    f"run: chmod 600 {path}"
+                )
+            else:
+                passed.append(f"{path.name} is private to its owner")
 
     # Check environment variable
     if os.environ.get("PAGEVAULT_PASSWORD"):
