@@ -137,9 +137,7 @@ def audit(config_path):
     # --- File integrity (check managed files if available) ---
     managed_files: list[Path] = []
     if cfg.managed and cfg.config_path:
-        managed_files = _resolve_managed_html_files(
-            cfg.config_path.parent, cfg.managed
-        )
+        managed_files = _resolve_managed_html_files(cfg.config_path.parent, cfg.managed)
 
     if managed_files:
         checked = 0

@@ -2,11 +2,13 @@
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
 import yaml
 
+from pagevault._fs import atomic_write
 from pagevault.config import (
     find_config_file,
     get_global_config_path,
@@ -15,9 +17,9 @@ from pagevault.crypto import PagevaultError
 from pagevault.parser import (
     _parse_html,
     has_pagevault_elements,
+    lock_html,
     mark_body,
     mark_elements,
-    process_file,
 )
 
 HTML_EXTENSIONS = frozenset({".html", ".htm"})
@@ -44,6 +46,40 @@ def _relative_path(path: Path) -> str:
         return str(path.relative_to(Path.cwd()))
     except ValueError:
         return str(path)
+
+
+@dataclass
+class BatchTally:
+    """Per-file outcomes of a batch command (lock, unlock, sync).
+
+    A batch carries on past a file that fails, but :meth:`finish` makes the
+    command exit 1 if any did, so scripts and CI notice.
+    """
+
+    done: int = 0
+    skipped: int = 0
+    failed: int = 0
+
+    def fail(self, message: str) -> None:
+        click.echo(message, err=True)
+        self.failed += 1
+
+    def finish(self, verb: str) -> None:
+        summary = f"\n{self.done} file(s) {verb}, {self.skipped} skipped"
+        if self.failed:
+            summary += f", {self.failed} failed"
+        click.echo(summary)
+        if self.failed:
+            raise click.exceptions.Exit(1)
+
+
+def _read_html(path: Path, tally: BatchTally) -> str | None:
+    """Read an input file as UTF-8, recording a failure if that's impossible."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        tally.fail(f"Error reading {_relative_path(path)}: {e}")
+        return None
 
 
 def _collect_files(paths: tuple, recursive: bool) -> list[Path]:
@@ -120,16 +156,12 @@ def _exclude_under_output_dir(
     return kept
 
 
-def _resolve_managed_html_files(
-    config_dir: Path, patterns: list[str]
-) -> list[Path]:
+def _resolve_managed_html_files(config_dir: Path, patterns: list[str]) -> list[Path]:
     """Expand managed glob patterns (relative to config_dir) to HTML files."""
     files: list[Path] = []
     for pattern in patterns:
         files.extend(
-            f
-            for f in sorted(config_dir.glob(pattern))
-            if f.is_file() and _is_html(f)
+            f for f in sorted(config_dir.glob(pattern)) if f.is_file() and _is_html(f)
         )
     return sorted(set(files))
 
@@ -328,8 +360,8 @@ def _lock_html_files(
     selector_title: str | None,
     source_paths: tuple,
     pad: bool = False,
-) -> tuple[int, int]:
-    """Lock HTML files. Returns (processed, skipped)."""
+) -> BatchTally:
+    """Lock HTML files, returning the per-file outcomes."""
 
     # Load custom CSS if provided
     custom_css = None
@@ -339,22 +371,16 @@ def _lock_html_files(
         except OSError as e:
             raise click.ClickException(f"Cannot read CSS file: {e}")
 
-    processed = 0
-    skipped = 0
+    tally = BatchTally()
 
     for input_path in files:
-        # Determine output path
         output_path = _get_output_path(input_path, source_paths, output_base)
-
-        # Read file content
-        try:
-            content = input_path.read_text(encoding="utf-8")
-        except OSError as e:
-            click.echo(f"Warning: Cannot read {input_path}: {e}", err=True)
+        content = _read_html(input_path, tally)
+        if content is None:
             continue
 
-        # Apply wrapping
-        content_was_wrapped = False
+        # Mark (by selector, or the whole body when nothing is marked yet).
+        # The marked plaintext stays in memory: only ciphertext is written.
         if selectors:
             content = mark_elements(
                 content,
@@ -363,20 +389,17 @@ def _lock_html_files(
                 remember=selector_remember,
                 title=selector_title,
             )
-            content_was_wrapped = has_pagevault_elements(content)
         elif not has_pagevault_elements(content):
-            # Default: wrap all body content
             content = mark_body(
                 content,
                 hint=selector_hint,
                 remember=selector_remember,
                 title=selector_title,
             )
-            content_was_wrapped = has_pagevault_elements(content)
 
         # Check for pagevault elements (including newly wrapped ones)
         if not has_pagevault_elements(content):
-            skipped += 1
+            tally.skipped += 1
             continue
 
         rel_input = _relative_path(input_path)
@@ -384,39 +407,36 @@ def _lock_html_files(
 
         if dry_run:
             click.echo(f"Would lock: {rel_input} -> {rel_output}")
-            processed += 1
+            tally.done += 1
             continue
 
         try:
-            # If content was wrapped (selector or body), the modified
-            # plaintext lives only in `content` — write it to output first
-            # so process_file can read+encrypt from there. Otherwise read
-            # straight from the input path.
-            if content_was_wrapped or selectors:
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(content, encoding="utf-8")
-                source_path = output_path
-            else:
-                source_path = input_path
-            changed = process_file(
-                source_path,
-                output_path,
+            locked = lock_html(
+                content,
                 password=password,
                 config=config,
-                mode="lock",
+                salt=config.salt if config else None,
                 custom_css=custom_css,
                 users=users,
                 pad=pad,
             )
-            if changed:
-                click.echo(f"Locked: {rel_input} -> {rel_output}")
-                processed += 1
-            else:
-                skipped += 1
         except PagevaultError as e:
-            click.echo(f"Error processing {rel_input}: {e}", err=True)
+            tally.fail(f"Error processing {rel_input}: {e}")
+            continue
 
-    return processed, skipped
+        if locked == content:
+            tally.skipped += 1
+            continue
+
+        try:
+            atomic_write(output_path, locked)
+        except OSError as e:
+            tally.fail(f"Error writing {rel_output}: {e}")
+            continue
+        click.echo(f"Locked: {rel_input} -> {rel_output}")
+        tally.done += 1
+
+    return tally
 
 
 def _wrap_single_file(
@@ -477,14 +497,9 @@ def _wrap_site_directory(
     Returns:
         Path to output file
     """
-    from pagevault.wrap import wrap_site
+    from pagevault.wrap import default_site_output_path, wrap_site
 
-    # Determine output path
-    if output_path:
-        result_path = output_path
-    else:
-        # Default: place <dirname>.html in parent directory
-        result_path = path.parent / f"{path.name}.html"
+    result_path = output_path or default_site_output_path(path)
 
     if dry_run:
         rel_in = _relative_path(path)
@@ -546,9 +561,7 @@ def _find_first_envelope(soup) -> dict | None:
             try:
                 return json.loads(child.string)
             except json.JSONDecodeError as e:
-                raise click.ClickException(
-                    f"Invalid region envelope JSON: {e}"
-                ) from e
+                raise click.ClickException(f"Invalid region envelope JSON: {e}") from e
     return None
 
 
@@ -628,9 +641,6 @@ def _print_info(file_path: str) -> None:
         click.echo(f"Chunk size:     {_format_size(info_data['chunk_size'])}")
         click.echo(f"Chunks:         {info_data['chunk_count']}")
         click.echo(f"Total size:     {_format_size(info_data['total_size'])}")
-
-        if "content_hash" in envelope:
-            click.echo(f"Content hash:   {envelope['content_hash']}")
 
         # Count chunk script tags in a single DOM pass (previously O(N²)
         # via while soup.find). If it disagrees with the envelope, surface
@@ -844,9 +854,7 @@ def _init_global(force: bool) -> None:
             f"Username '{username}' cannot contain ':' (used as delimiter)."
         )
 
-    user_password = click.prompt(
-        "Password", hide_input=True, confirmation_prompt=True
-    )
+    user_password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
     if not user_password:
         raise click.ClickException("Password cannot be empty.")
 

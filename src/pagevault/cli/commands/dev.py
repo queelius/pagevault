@@ -1,6 +1,33 @@
 """dev command group (developer experience tools)."""
 
+import functools
+import http.server
+import urllib.parse
+import webbrowser
+from pathlib import Path
+
 import click
+
+
+class _PreviewHandler(http.server.SimpleHTTPRequestHandler):
+    """Static file handler that never serves hidden paths.
+
+    A project root typically holds ``.pagevault.yaml`` (plaintext
+    credentials) and ``.git/``; a preview server has no reason to expose
+    either. Covers GET and HEAD, and percent-encoded dots.
+    """
+
+    def send_head(self):
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if any(part.startswith(".") for part in path.split("/")):
+            self.send_error(404, "File not found")
+            return None
+        return super().send_head()
+
+
+def make_handler(directory: Path):
+    """Return a request handler class serving ``directory``."""
+    return functools.partial(_PreviewHandler, directory=str(directory))
 
 
 @click.group()
@@ -25,13 +52,18 @@ def dev():
     help="Port number (default: 8765)",
 )
 @click.option(
+    "--host",
+    default="127.0.0.1",
+    help="Interface to bind (default: 127.0.0.1; use 0.0.0.0 to expose on the network)",
+)
+@click.option(
     "-o",
     "--open",
     "open_browser",
     is_flag=True,
     help="Open browser automatically",
 )
-def serve(directory, port, open_browser):
+def serve(directory, port, host, open_browser):
     """Serve directory over local HTTP for previewing encrypted files.
 
     Useful for testing encrypted HTML files that need HTTP (not file://) to work
@@ -43,16 +75,9 @@ def serve(directory, port, open_browser):
       pagevault dev serve _locked/ -P 9000    # Serve _locked/ on port 9000
       pagevault dev serve _locked/ --open     # Serve and open browser
     """
-    import functools
-    import http.server
-    import webbrowser
-
-    handler = functools.partial(
-        http.server.SimpleHTTPRequestHandler, directory=directory
-    )
     try:
-        with http.server.HTTPServer(("", port), handler) as httpd:
-            url = f"http://localhost:{port}"
+        with http.server.HTTPServer((host, port), make_handler(directory)) as httpd:
+            url = f"http://{'localhost' if host in ('127.0.0.1', '') else host}:{port}"
             click.echo(f"Serving {directory} at {url}")
             click.echo("Press Ctrl+C to stop.")
             if open_browser:

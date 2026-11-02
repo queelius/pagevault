@@ -4,16 +4,45 @@ from pathlib import Path
 
 import click
 
+from pagevault._fs import atomic_write
 from pagevault.config import load_config
 from pagevault.crypto import PagevaultError
-from pagevault.parser import has_pagevault_elements, process_file
+from pagevault.parser import has_pagevault_elements, process_file, unlock_html
+from pagevault.wrap import WrapDocument, WrapKind
 
 from ..shared import (
+    BatchTally,
     _collect_files,
     _default_output_dir,
     _get_output_path,
+    _read_html,
     _relative_path,
 )
+
+
+def _unlock_wrapped(
+    doc: WrapDocument,
+    output_path: Path,
+    password: str,
+    username: str | None,
+    dry_run: bool,
+) -> Path:
+    """Decrypt a wrapped file or site; returns where its contents go.
+
+    ``output_path`` is where the wrapper HTML would be mirrored. A file is
+    restored under its original name beside it; a site is extracted into a
+    directory named after the wrapper (``site.html`` -> ``site/``).
+    """
+    payload = doc.decrypt(password, username=username)
+    if payload.kind is WrapKind.FILE:
+        dest = output_path.with_name(payload.filename)
+        if not dry_run:
+            atomic_write(dest, payload.data)
+    else:
+        dest = output_path.with_suffix("")
+        if not dry_run:
+            payload.extract_site(dest)
+    return dest
 
 
 @click.command()
@@ -52,9 +81,13 @@ def unlock(
     username,
     to_stdout,
 ):
-    """Unlock (decrypt) HTML files with encrypted <pagevault> regions.
+    """Unlock (decrypt) encrypted HTML files.
 
-    Returns files to "marked" state (plaintext inside <pagevault> wrappers).
+    Pages with encrypted <pagevault> regions return to "marked" state
+    (plaintext inside <pagevault> wrappers). Wrapped files are restored
+    under their original name; wrapped sites are extracted to a directory.
+    With --stdout, a wrapped file's raw bytes (a site's zip archive) are
+    written to stdout.
 
     \b
     Examples:
@@ -102,8 +135,6 @@ def unlock(
 
     # --stdout mode: decrypt and write to stdout
     if to_stdout:
-        from pagevault.parser import unlock_html
-
         if len(paths) != 1 or not Path(paths[0]).is_file():
             raise click.UsageError("--stdout requires exactly one file")
 
@@ -113,14 +144,18 @@ def unlock(
         except OSError as e:
             raise click.ClickException(f"Cannot read {input_path}: {e}") from e
 
-        if not has_pagevault_elements(content):
-            raise click.ClickException("File has no encrypted pagevault elements")
-
         try:
+            doc = WrapDocument.parse(content)
+            if doc is not None:
+                payload = doc.decrypt(pwd, username=user)
+                click.echo(payload.data, nl=False)  # bytes go out unencoded
+                return
             decrypted = unlock_html(content, pwd, username=user)
         except PagevaultError as e:
             raise click.ClickException(str(e)) from e
 
+        if decrypted == content:
+            raise click.ClickException("File has no encrypted pagevault content")
         click.echo(decrypted, nl=False)
         return
 
@@ -133,30 +168,36 @@ def unlock(
         click.echo("No HTML files found")
         return
 
-    # Process files
-    processed = 0
-    skipped = 0
+    tally = BatchTally()
 
     for input_path in files:
         output_path = _get_output_path(input_path, paths, output_base)
-
-        # Quick check for pagevault elements
-        try:
-            content = input_path.read_text(encoding="utf-8")
-        except OSError as e:
-            click.echo(f"Warning: Cannot read {input_path}: {e}", err=True)
+        content = _read_html(input_path, tally)
+        if content is None:
             continue
 
         if not has_pagevault_elements(content):
-            skipped += 1
+            tally.skipped += 1
             continue
 
         rel_input = _relative_path(input_path)
         rel_output = _relative_path(output_path)
 
+        try:
+            doc = WrapDocument.parse(content)
+            if doc is not None:
+                dest = _unlock_wrapped(doc, output_path, pwd, user, dry_run)
+                verb = "Would unlock" if dry_run else "Unlocked"
+                click.echo(f"{verb}: {rel_input} -> {_relative_path(dest)}")
+                tally.done += 1
+                continue
+        except (PagevaultError, OSError) as e:
+            tally.fail(f"Error processing {rel_input}: {e}")
+            continue
+
         if dry_run:
             click.echo(f"Would unlock: {rel_input} -> {rel_output}")
-            processed += 1
+            tally.done += 1
             continue
 
         try:
@@ -170,10 +211,10 @@ def unlock(
             )
             if changed:
                 click.echo(f"Unlocked: {rel_input} -> {rel_output}")
-                processed += 1
+                tally.done += 1
             else:
-                skipped += 1
+                tally.skipped += 1
         except PagevaultError as e:
-            click.echo(f"Error processing {rel_input}: {e}", err=True)
+            tally.fail(f"Error processing {rel_input}: {e}")
 
-    click.echo(f"\n{processed} file(s) unlocked, {skipped} skipped")
+    tally.finish("unlocked")

@@ -4,11 +4,19 @@ from pathlib import Path
 
 import click
 
+from pagevault._fs import atomic_write
 from pagevault.config import load_config
 from pagevault.crypto import PagevaultError
 from pagevault.parser import has_pagevault_elements, sync_html_keys
+from pagevault.wrap import WrapDocument
 
-from ..shared import _collect_files, _relative_path, _resolve_managed_html_files
+from ..shared import (
+    BatchTally,
+    _collect_files,
+    _read_html,
+    _relative_path,
+    _resolve_managed_html_files,
+)
 
 
 @click.command()
@@ -64,41 +72,42 @@ def sync(paths, recursive, config_path, dry_run):
         click.echo("No HTML files found")
         return
 
-    processed = 0
-    skipped = 0
+    tally = BatchTally()
 
     for input_path in files:
-        try:
-            content = input_path.read_text(encoding="utf-8")
-        except OSError as e:
-            click.echo(f"Warning: Cannot read {input_path}: {e}", err=True)
+        content = _read_html(input_path, tally)
+        if content is None:
             continue
 
         if not has_pagevault_elements(content):
-            skipped += 1
+            tally.skipped += 1
             continue
 
         rel_path = _relative_path(input_path)
 
         if dry_run:
             click.echo(f"Would sync: {rel_path}")
-            processed += 1
+            tally.done += 1
             continue
 
         try:
-            result = sync_html_keys(
-                content,
-                old_users=config.users,  # Use current users to recover CEK
-                new_users=config.users,
-            )
+            # Current users recover the content; removed users lose access
+            # because the content is re-encrypted under a fresh CEK.
+            doc = WrapDocument.parse(content)
+            if doc is not None:
+                result = doc.rekey(old_users=config.users, new_users=config.users)
+            else:
+                result = sync_html_keys(
+                    content, old_users=config.users, new_users=config.users
+                )
 
             if result != content:
-                input_path.write_text(result, encoding="utf-8")
+                atomic_write(input_path, result)
                 click.echo(f"Synced: {rel_path}")
-                processed += 1
+                tally.done += 1
             else:
-                skipped += 1
-        except PagevaultError as e:
-            click.echo(f"Error syncing {rel_path}: {e}", err=True)
+                tally.skipped += 1
+        except (PagevaultError, OSError) as e:
+            tally.fail(f"Error syncing {rel_path}: {e}")
 
-    click.echo(f"\n{processed} file(s) synced, {skipped} skipped")
+    tally.finish("synced")

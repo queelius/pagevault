@@ -25,6 +25,11 @@ ruff format --check src/ tests/
 
 # Browser-side JS unit tests (Node 20+, no npm deps)
 node --test "tests/js/**/*.mjs"
+
+# Real-browser tests via Playwright; skipped unless installed. Uses the system
+# Google Chrome if present, else: python -m playwright install --only-shell chromium
+pip install -e ".[dev,browser]"
+pytest tests/test_browser_activation.py tests/test_browser_wrap.py
 ```
 
 ## Architecture

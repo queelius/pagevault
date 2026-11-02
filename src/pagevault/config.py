@@ -20,6 +20,11 @@ GLOBAL_CONFIG_FILE = "config.yaml"
 ENV_PASSWORD = "PAGEVAULT_PASSWORD"
 ENV_SALT = "PAGEVAULT_SALT"
 
+# Keys that make pagevault load code (viewers_dir imports Python) or embed
+# arbitrary local files into its output (css_file). Honored only from a
+# trusted config; see _is_trusted_location().
+PATH_BEARING_KEYS = ("viewers_dir", "css_file")
+
 
 @dataclass
 class TemplateConfig:
@@ -186,6 +191,28 @@ def find_config_file(start_path: Path | None = None) -> Path | None:
         current = parent
 
 
+def _is_trusted_location(config_path: Path) -> bool:
+    """True if the working directory is at or below the config's directory.
+
+    Running pagevault from inside a project is consent to that project's
+    config, as with make or npm scripts. A config found only by walking up
+    from an input path somewhere else is not.
+    """
+    config_dir = _config_dir(config_path)
+    cwd = Path.cwd().resolve()
+    return cwd == config_dir or config_dir in cwd.parents
+
+
+def _config_dir(config_path: Path) -> Path:
+    """The directory a config's trust and relative paths are judged from.
+
+    Symlinks are resolved, and both the trust check and the path-bearing
+    keys use this one directory: a symlinked config is trusted (or not) for
+    where it really lives, so its relative paths must resolve there too.
+    """
+    return Path(config_path).resolve().parent
+
+
 def load_config(
     config_path: Path | None = None,
     start_path: Path | None = None,
@@ -218,12 +245,14 @@ def load_config(
         config_path = Path(config_path)
         if not config_path.is_file():
             raise PagevaultError(f"Config file not found: {config_path}")
+        trusted = True  # named explicitly by the caller
     else:
         config_path = find_config_file(start_path)
+        trusted = config_path is not None and _is_trusted_location(config_path)
 
     # Load config file if found
     if config_path is not None:
-        config = _load_config_file(config_path)
+        config = _load_config_file(config_path, trusted=trusted)
         config.config_path = config_path
 
     # Merge global config (global provides defaults, local overrides)
@@ -276,17 +305,19 @@ def load_config(
     return config
 
 
-def _load_config_file(config_path: Path) -> PagevaultConfig:
+def _load_config_file(config_path: Path, trusted: bool = True) -> PagevaultConfig:
     """Load configuration from a YAML file.
 
     Args:
         config_path: Path to .pagevault.yaml file.
+        trusted: Whether PATH_BEARING_KEYS may be honored.
 
     Returns:
         Configuration loaded from file.
 
     Raises:
-        PagevaultError: If file cannot be read or parsed.
+        PagevaultError: If file cannot be read or parsed, or an untrusted
+            config sets a path-bearing key.
     """
     try:
         with open(config_path) as f:
@@ -295,6 +326,16 @@ def _load_config_file(config_path: Path) -> PagevaultConfig:
         raise PagevaultError(f"Invalid YAML in {config_path}: {e}") from e
     except OSError as e:
         raise PagevaultError(f"Cannot read config file {config_path}: {e}") from e
+
+    if not trusted:
+        refused = [key for key in PATH_BEARING_KEYS if key in data]
+        if refused:
+            raise PagevaultError(
+                f"Refusing {', '.join(refused)} from {config_path}: it was found "
+                "by searching from an input path outside the current directory, "
+                "and these keys load code or files. Run pagevault from inside "
+                f"that project, or pass -c {config_path} to trust it."
+            )
 
     config = PagevaultConfig(config_path=config_path)
 
@@ -361,7 +402,7 @@ def _load_config_file(config_path: Path) -> PagevaultConfig:
         viewers_dir_path = Path(data["viewers_dir"])
         # Resolve relative paths against config file directory
         if not viewers_dir_path.is_absolute():
-            viewers_dir_path = config_path.parent / viewers_dir_path
+            viewers_dir_path = _config_dir(config_path) / viewers_dir_path
         config.viewers_dir = viewers_dir_path
 
     # Load custom CSS from file
@@ -369,7 +410,7 @@ def _load_config_file(config_path: Path) -> PagevaultConfig:
         css_file_path = Path(data["css_file"])
         # Resolve relative paths against config file directory
         if not css_file_path.is_absolute():
-            css_file_path = config_path.parent / css_file_path
+            css_file_path = _config_dir(config_path) / css_file_path
         try:
             config.custom_css = css_file_path.read_text(encoding="utf-8")
         except OSError as e:

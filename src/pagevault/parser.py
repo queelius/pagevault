@@ -12,6 +12,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 from . import __version__
+from ._fs import atomic_write
 from .config import DefaultsConfig, PagevaultConfig, TemplateConfig
 from .crypto import (
     PagevaultError,
@@ -172,8 +173,11 @@ def extract_element_content(element: Tag) -> str:
     Returns:
         Inner HTML as string.
     """
-    # Get all inner content as string
-    return "".join(str(child) for child in element.children)
+    # decode_contents() serializes children as markup. Joining str(child)
+    # would not: str() of a text node is its *decoded* text and str() of a
+    # Comment drops the <!-- --> delimiters, so "&lt;img&gt;" would be
+    # encrypted as a live <img> tag that the browser assigns to innerHTML.
+    return element.decode_contents()
 
 
 def is_already_encrypted(element: Tag) -> bool:
@@ -274,7 +278,9 @@ def lock_html(
         }
 
     encrypted_any = False
-    had_encrypted = False  # Tracks pre-existing encrypted elements (for runtime injection)
+    had_encrypted = (
+        False  # Tracks pre-existing encrypted elements (for runtime injection)
+    )
 
     for element in elements:
         # Skip already-encrypted elements — preserving their ciphertext.
@@ -450,10 +456,10 @@ def unlock_html(
         # parser.py) fall back to string-level rstrip; that path silently
         # eats any plaintext that legitimately ended in NULs, but is
         # required for backward compatibility with files in the wild.
-        original_size = (
-            dec_meta.get("size") if isinstance(dec_meta, dict) else None
-        )
-        if isinstance(original_size, int) and 0 <= original_size <= len(plaintext_bytes):
+        original_size = dec_meta.get("size") if isinstance(dec_meta, dict) else None
+        if isinstance(original_size, int) and 0 <= original_size <= len(
+            plaintext_bytes
+        ):
             plaintext_bytes = plaintext_bytes[:original_size]
             try:
                 decrypted_content = plaintext_bytes.decode("utf-8")
@@ -471,7 +477,9 @@ def unlock_html(
             decrypted_content = decrypted_content.rstrip("\x00")
 
         # Verify content_hash if present in metadata
-        expected_hash = dec_meta.get("content_hash") if isinstance(dec_meta, dict) else None
+        expected_hash = (
+            dec_meta.get("content_hash") if isinstance(dec_meta, dict) else None
+        )
         if expected_hash:
             actual_hash = content_hash(decrypted_content)
             if actual_hash != expected_hash:
@@ -499,22 +507,27 @@ def unlock_html(
         # Parse the decrypted fragment with the same parser strategy as
         # the outer document, so round-trips don't drift across the
         # lxml/html.parser boundary (the two disagree on table tbody
-        # insertion, <select> bare text, etc.). lxml wraps fragments in
-        # <html><body>; html.parser doesn't. Extract from <body> when
-        # present, else from the soup root.
-        decrypted_soup = _parse_html(decrypted_content)
-        body = decrypted_soup.find("body")
-        content_root = body if body is not None else decrypted_soup
+        # insertion, <select> bare text, etc.). The fragment came from
+        # inside <body>, so parse it there: a bare fragment lets lxml hoist
+        # a leading <style>, <meta>, <link> or <script> into an implied
+        # <head>, and drop leading whitespace, before <body> ever opens.
+        decrypted_soup = _parse_html(
+            "<!DOCTYPE html><html><head></head><body>" + decrypted_content
+        )
+        content_root = decrypted_soup.find("body")
         # Use list() to avoid iterator invalidation when appending.
         for child in list(content_root.children):
             element.append(child)
 
         decrypted_any = True
 
-    if decrypted_any:
-        # Remove injected runtime
-        _remove_runtime(soup)
+    # Nothing decrypted: return the input untouched, so callers comparing
+    # input to output (process_file) don't count a reserialization as an
+    # unlock.
+    if not decrypted_any:
+        return html
 
+    _remove_runtime(soup)
     return str(soup)
 
 
@@ -599,7 +612,9 @@ def sync_html_keys(
                     f"Cannot recover CEK: no valid old credentials ({e})"
                 ) from e
         else:
-            raise PagevaultError("Must provide old_password or old_users to recover CEK")
+            raise PagevaultError(
+                "Must provide old_password or old_users to recover CEK"
+            )
 
         if recovered_pt is None:
             raise PagevaultError("Cannot recover CEK: no valid old credentials")
@@ -829,7 +844,6 @@ pagevault[data-pv-v4] {{
 """
 
 
-
 def _get_javascript(template: TemplateConfig, defaults: DefaultsConfig) -> str:
     """Generate JavaScript for the pagevault Web Component."""
     from .runtime import build_region_js
@@ -892,11 +906,8 @@ def process_file(
     if processed == html:
         return False
 
-    # Ensure output directory exists
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
     try:
-        output_path.write_text(processed, encoding="utf-8")
+        atomic_write(output_path, processed)
     except OSError as e:
         raise PagevaultError(f"Cannot write file {output_path}: {e}") from e
 

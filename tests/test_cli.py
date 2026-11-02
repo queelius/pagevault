@@ -8,6 +8,7 @@ from click.testing import CliRunner
 
 from pagevault.cli import main
 from pagevault.config import CONFIG_FILENAME
+from pagevault.crypto import PagevaultError
 
 
 @pytest.fixture
@@ -696,9 +697,15 @@ class TestSelectorLock:
 
         content = (output_dir / "index.html").read_text()
         from bs4 import BeautifulSoup
-        assert len(BeautifulSoup(content, "html.parser").find_all(
-            "pagevault", attrs={"data-pv-v4": True}
-        )) == 2
+
+        assert (
+            len(
+                BeautifulSoup(content, "html.parser").find_all(
+                    "pagevault", attrs={"data-pv-v4": True}
+                )
+            )
+            == 2
+        )
         assert "Secret content here" not in content
         assert "Private section" not in content
 
@@ -928,9 +935,15 @@ class TestSelectorLock:
         # Final file should have both sections locked
         content = (pass2_dir / "index.html").read_text()
         from bs4 import BeautifulSoup
-        assert len(BeautifulSoup(content, "html.parser").find_all(
-            "pagevault", attrs={"data-pv-v4": True}
-        )) == 2
+
+        assert (
+            len(
+                BeautifulSoup(content, "html.parser").find_all(
+                    "pagevault", attrs={"data-pv-v4": True}
+                )
+            )
+            == 2
+        )
         assert "Admin content" not in content
         assert "Member content" not in content
         assert 'data-title="Admin Area"' in content
@@ -1105,6 +1118,32 @@ defaults:
         assert "Public content" in content
         assert "Secret content" not in content
         assert "data-pv-v4" in content
+
+
+class TestLockLeavesNoPlaintext:
+    """A failed lock must never leave plaintext in the (deployable) output dir.
+
+    Marking (by selector or whole body) produces plaintext that previously
+    went to the output path first, for process_file to read back.
+    """
+
+    @pytest.mark.parametrize("extra", [[], ["-s", "#s"]], ids=["body", "selector"])
+    @pytest.mark.parametrize("failure", [PagevaultError, KeyboardInterrupt])
+    def test_failed_encryption_writes_nothing(
+        self, runner, tmp_path, monkeypatch, extra, failure
+    ):
+        page = tmp_path / "page.html"
+        page.write_text('<html><body><div id="s">TOP SECRET</div></body></html>')
+        out = tmp_path / "out"
+
+        def boom(*args, **kwargs):
+            raise failure("encryption failed")
+
+        monkeypatch.setattr("pagevault.parser.encrypt_v4", boom)
+        runner.invoke(main, ["lock", str(page), "-p", "pw", "-d", str(out), *extra])
+
+        leaked = [f for f in tmp_path.rglob("*") if f.is_file() and f != page]
+        assert leaked == []
 
 
 class TestMark:
@@ -2607,9 +2646,7 @@ salt: "0123456789abcdef0123456789abcdef"
             ["lock", str(html_path), "-c", str(config_path), "-d", str(locked_dir)],
         )
 
-        result = runner.invoke(
-            main, ["inspect", str(locked_dir / "index.html")]
-        )
+        result = runner.invoke(main, ["inspect", str(locked_dir / "index.html")])
 
         assert result.exit_code == 0
         assert "Encrypted regions: 1" in result.output
@@ -2645,9 +2682,7 @@ users:
             ["lock", str(html_path), "-c", str(config_path), "-d", str(locked_dir)],
         )
 
-        result = runner.invoke(
-            main, ["inspect", str(locked_dir / "index.html")]
-        )
+        result = runner.invoke(main, ["inspect", str(locked_dir / "index.html")])
 
         assert result.exit_code == 0
         assert "Key blobs:    2" in result.output
@@ -2658,9 +2693,7 @@ users:
         html_path = tmp_path / "plain.html"
         html_path.write_text("<html><body>Hello</body></html>")
 
-        result = runner.invoke(
-            main, ["inspect", str(html_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(html_path)])
 
         assert result.exit_code != 0
         assert "no pagevault elements" in result.output.lower()
@@ -2679,9 +2712,7 @@ users:
         )
         assert result.exit_code == 0
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
 
         assert result.exit_code == 0
         assert "v4 chunked" in result.output
@@ -2701,15 +2732,13 @@ users:
         src = tmp_path / "data.txt"
         src.write_text("payload")
         wrapped = tmp_path / "data.html"
-        result = runner.invoke(
-            main, ["lock", str(src), "-p", "pw", "-o", str(wrapped)]
-        )
+        result = runner.invoke(main, ["lock", str(src), "-p", "pw", "-o", str(wrapped)])
         assert result.exit_code == 0
 
         # Splice a synthetic region envelope into the wrapped file.
         content = wrapped.read_text(encoding="utf-8")
         synthetic_region = (
-            '<pagevault data-pv-v4>'
+            "<pagevault data-pv-v4>"
             '<script data-pv-meta type="x-pv">{"unused":true}</script>'
             '<script type="x-pv" data-pv-chunk="0">x</script>'
             "</pagevault>"
@@ -2756,8 +2785,11 @@ salt: "0123456789abcdef0123456789abcdef"
         result = runner.invoke(
             main,
             [
-                "inspect", str(locked_dir / "index.html"),
-                "-p", "test-password", "--check",
+                "inspect",
+                str(locked_dir / "index.html"),
+                "-p",
+                "test-password",
+                "--check",
             ],
         )
 
@@ -2785,8 +2817,11 @@ salt: "0123456789abcdef0123456789abcdef"
         result = runner.invoke(
             main,
             [
-                "inspect", str(locked_dir / "index.html"),
-                "-p", "wrong-password", "--check",
+                "inspect",
+                str(locked_dir / "index.html"),
+                "-p",
+                "wrong-password",
+                "--check",
             ],
         )
 
@@ -3473,9 +3508,7 @@ class TestInfoV4:
         )
         assert result.exit_code == 0
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "v4 chunked" in result.output
         assert "Chunks:" in result.output
@@ -3491,27 +3524,23 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "aes-256-gcm" in result.output
         assert "pbkdf2-sha256" in result.output
         assert "310,000" in result.output
 
-    def test_info_v3_shows_content_hash(self, runner, tmp_path):
-        """Info on v4 file shows content hash if present."""
+    def test_info_does_not_reveal_content_hash(self, runner, tmp_path):
+        """inspect runs without a password, so it must not show a plaintext hash."""
         txt_path = tmp_path / "test.txt"
         txt_path.write_text("Hello!")
         out_path = tmp_path / "test.html"
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
-        assert "Content hash:" in result.output
+        assert "Content hash:" not in result.output
 
     def test_info_v3_shows_runtime(self, runner, tmp_path):
         """Info on v4 file shows runtime scripts and styles."""
@@ -3521,9 +3550,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Runtime scripts:" in result.output
         assert "Runtime styles:" in result.output
@@ -3537,9 +3564,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Version:        v4" in result.output
 
@@ -3551,9 +3576,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(txt_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Chunk tags:" in result.output
 
@@ -3567,9 +3590,7 @@ class TestInfoV4:
 
         runner.invoke(main, ["lock", str(big_path), "-p", "pw", "-o", str(out_path)])
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "Chunks:         3" in result.output
         assert "Chunk tags:     3" in result.output
@@ -3599,9 +3620,7 @@ class TestInfoV4:
         )
         assert result.exit_code == 0
 
-        result = runner.invoke(
-            main, ["inspect", str(out_path)]
-        )
+        result = runner.invoke(main, ["inspect", str(out_path)])
         assert result.exit_code == 0
         assert "v4 chunked" in result.output
 
@@ -3691,6 +3710,85 @@ class TestServeCommand:
         result = runner.invoke(main, ["dev", "serve", "--help"])
         assert "-P" in result.output
 
+    @staticmethod
+    def _record_bind(monkeypatch):
+        """Replace HTTPServer with a fake that records its bind address."""
+        import http.server
+
+        bound = []
+
+        class FakeServer:
+            def __init__(self, address, handler):
+                bound.append(address)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def serve_forever(self):
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr(http.server, "HTTPServer", FakeServer)
+        return bound
+
+    def test_serve_binds_loopback_by_default(self, runner, tmp_path, monkeypatch):
+        """The preview server must not be reachable from the network by default."""
+        bound = self._record_bind(monkeypatch)
+        result = runner.invoke(main, ["dev", "serve", str(tmp_path), "-P", "9999"])
+        assert result.exit_code == 0, result.output
+        assert bound == [("127.0.0.1", 9999)]
+
+    def test_serve_host_option_opts_in_to_wider_binding(
+        self, runner, tmp_path, monkeypatch
+    ):
+        bound = self._record_bind(monkeypatch)
+        result = runner.invoke(
+            main, ["dev", "serve", str(tmp_path), "--host", "0.0.0.0"]
+        )
+        assert result.exit_code == 0, result.output
+        assert bound == [("0.0.0.0", 8765)]
+
+    @pytest.mark.parametrize(
+        "path, status",
+        [
+            ("/index.html", 200),
+            ("/.pagevault.yaml", 404),
+            ("/%2Epagevault.yaml", 404),
+            ("/.git/config", 404),
+            ("/sub/.env", 404),
+        ],
+    )
+    def test_serve_refuses_hidden_paths(self, tmp_path, path, status):
+        """Hidden files (credentials in .pagevault.yaml, .git/) are never served."""
+        import http.client
+        import http.server
+        import threading
+
+        from pagevault.cli.commands.dev import make_handler
+
+        (tmp_path / "index.html").write_text("<html>ok</html>")
+        (tmp_path / CONFIG_FILENAME).write_text("users:\n  alice: alicepw\n")
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "config").write_text("[core]")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / ".env").write_text("TOKEN=x")
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), make_handler(tmp_path))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            conn.request("GET", path)
+            response = conn.getresponse()
+            body = response.read()
+            assert response.status == status
+            assert b"alicepw" not in body
+        finally:
+            server.shutdown()
+            server.server_close()
+
 
 class TestCheckPrompt:
     """Tests for inspect --check interactive password prompt."""
@@ -3765,8 +3863,13 @@ class TestUsersFilter:
         check_result = runner.invoke(
             main,
             [
-                "inspect", str(locked_dir / "index.html"),
-                "-p", "pw-a", "-u", "alice", "--check",
+                "inspect",
+                str(locked_dir / "index.html"),
+                "-p",
+                "pw-a",
+                "-u",
+                "alice",
+                "--check",
             ],
         )
         assert "correct" in check_result.output.lower()
@@ -3775,8 +3878,13 @@ class TestUsersFilter:
         check_result = runner.invoke(
             main,
             [
-                "inspect", str(locked_dir / "index.html"),
-                "-p", "pw-c", "-u", "charlie", "--check",
+                "inspect",
+                str(locked_dir / "index.html"),
+                "-p",
+                "pw-c",
+                "-u",
+                "charlie",
+                "--check",
             ],
         )
         assert "incorrect" in check_result.output.lower()
@@ -3860,3 +3968,70 @@ class TestConfigSetFormatting:
         )
         # Should not have Python-style "True"
         assert "'True'" not in result.output
+
+
+class TestBatchFailures:
+    """A batch keeps going past a bad file, but the exit status reports it."""
+
+    @pytest.fixture
+    def pages(self, tmp_path):
+        d = tmp_path / "pages"
+        d.mkdir()
+        (d / "a.html").write_text("<html><body><p>alpha</p></body></html>")
+        (d / "bad.html").write_bytes(b"<html><body>\xff\xfe not utf-8</body></html>")
+        (d / "c.html").write_text("<html><body><p>gamma</p></body></html>")
+        return d
+
+    def test_lock_continues_past_unreadable_file_and_exits_nonzero(
+        self, runner, tmp_path, pages
+    ):
+        out = tmp_path / "out"
+
+        result = runner.invoke(main, ["lock", str(pages), "-p", "pw", "-d", str(out)])
+
+        assert result.exit_code == 1
+        assert "bad.html" in result.output
+        assert "2 file(s) locked, 0 skipped, 1 failed" in result.output
+        assert sorted(p.name for p in out.iterdir()) == ["a.html", "c.html"]
+
+    def test_unlock_wrong_password_exits_nonzero(self, runner, tmp_path, pages):
+        locked = tmp_path / "locked"
+        runner.invoke(
+            main, ["lock", str(pages / "a.html"), "-p", "pw", "-d", str(locked)]
+        )
+
+        result = runner.invoke(
+            main, ["unlock", str(locked), "-p", "wrong", "-d", str(tmp_path / "u")]
+        )
+
+        assert result.exit_code == 1
+        assert "0 file(s) unlocked, 0 skipped, 1 failed" in result.output
+
+    def test_unlock_unreadable_file_counts_as_failure(self, runner, tmp_path, pages):
+        result = runner.invoke(
+            main,
+            ["unlock", str(pages / "bad.html"), "-p", "pw", "-d", str(tmp_path / "u")],
+        )
+
+        assert result.exit_code == 1
+        assert "1 failed" in result.output
+
+    def test_sync_unreadable_file_counts_as_failure(self, runner, tmp_path, pages):
+        cfg = tmp_path / CONFIG_FILENAME
+        cfg.write_text("users:\n  alice: pw-a\n")
+
+        result = runner.invoke(main, ["sync", str(pages / "bad.html"), "-c", str(cfg)])
+
+        assert result.exit_code == 1
+        assert "0 file(s) synced, 0 skipped, 1 failed" in result.output
+
+    def test_clean_batch_still_exits_zero(self, runner, tmp_path, pages):
+        (pages / "bad.html").unlink()
+
+        result = runner.invoke(
+            main, ["lock", str(pages), "-p", "pw", "-d", str(tmp_path / "out")]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "2 file(s) locked, 0 skipped" in result.output
+        assert "failed" not in result.output

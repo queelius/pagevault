@@ -60,6 +60,25 @@ test('computeHash returns 32-char hex for text', async () => {
   assert.match(hash, /^[0-9a-f]{32}$/);
 });
 
+test('computeHashBytes matches Python content_hash_bytes', async () => {
+  // Reference values from pagevault.crypto.content_hash_bytes.
+  const enc = new TextEncoder();
+  assert.equal(
+    await context.computeHashBytes(enc.encode('Hash me')),
+    '99cb5be02351afa6f0e107443f421fbf'
+  );
+  const all = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) all[i] = i;
+  assert.equal(
+    await context.computeHashBytes(all),
+    '40aff2e9d2d8922e47afd4648e696749'
+  );
+  assert.equal(
+    await context.computeHash('Hash me'),
+    await context.computeHashBytes(enc.encode('Hash me'))
+  );
+});
+
 test('decryptV4 decrypts a Python-generated v4 envelope', async () => {
   const fixtureJson = readFileSync(
     resolve(__dirname, 'fixtures/v4_simple.json'),

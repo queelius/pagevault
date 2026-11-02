@@ -16,3 +16,22 @@ def isolate_global_config(monkeypatch):
     with tempfile.TemporaryDirectory() as config_home:
         monkeypatch.setenv("XDG_CONFIG_HOME", config_home)
         yield
+
+
+@pytest.fixture(scope="session")
+def browser():
+    """A headless Chromium for the tests/test_browser_*.py suites.
+
+    Prefers the system's Google Chrome (present on GitHub's ubuntu runners),
+    so nothing has to be downloaded and nothing can go stale in Playwright's
+    browser cache; falls back to Playwright's own Chromium when Chrome is
+    not installed. Skips when Playwright itself is not installed.
+    """
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as p:
+        try:
+            b = p.chromium.launch(channel="chrome")
+        except sync_api.Error:
+            b = p.chromium.launch()
+        yield b
+        b.close()

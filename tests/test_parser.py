@@ -261,11 +261,7 @@ class TestMarkElementsOverlappingSelectors:
 
     def test_overlapping_selectors_wrap_once(self):
         """A selector matching the same element via different paths wraps once."""
-        html = (
-            '<html><body>'
-            '<div id="a" class="x">content</div>'
-            '</body></html>'
-        )
+        html = '<html><body><div id="a" class="x">content</div></body></html>'
         # Both selectors match the same element; only one wrapper expected.
         result = mark_elements(html, ["#a", ".x", "div"])
         soup = BeautifulSoup(result, "html.parser")
@@ -282,9 +278,9 @@ class TestMarkElementsOverlappingSelectors:
         feature so it doesn't silently regress.
         """
         html = (
-            '<html><body>'
+            "<html><body>"
             '<div id="outer"><span class="inner">x</span></div>'
-            '</body></html>'
+            "</body></html>"
         )
         # First selector wraps the outer div; the second matches the
         # inner span (whose parent is the original div, not pagevault).
@@ -439,7 +435,7 @@ class TestLockHtml:
         import re as _re
 
         def extract_envelope(locked):
-            m = _re.search(r'<script[^>]*data-pv-meta[^>]*>([^<]+)</script>', locked)
+            m = _re.search(r"<script[^>]*data-pv-meta[^>]*>([^<]+)</script>", locked)
             assert m is not None, "Envelope script not found"
             return _json.loads(m.group(1))
 
@@ -458,9 +454,7 @@ class TestLockHtml:
         """
         # Lock once, then strip the runtime from the output
         original = (
-            "<html><head></head><body>"
-            "<pagevault>Secret</pagevault>"
-            "</body></html>"
+            "<html><head></head><body><pagevault>Secret</pagevault></body></html>"
         )
         encrypted = lock_html(original, password="pw")
         assert "data-pv-v4" in encrypted
@@ -556,6 +550,55 @@ class TestUnlockHtml:
         assert 'hint="Remember the hint"' in decrypted
 
 
+def _region_inner(html: str) -> str:
+    """Serialized children of the single <pagevault> element in `html`."""
+    return BeautifulSoup(html, "lxml").find("pagevault").decode_contents()
+
+
+class TestRegionRoundTripFidelity:
+    """lock then unlock must reproduce the region's markup exactly.
+
+    The plaintext inside the envelope is what the browser assigns to
+    innerHTML, so serialization bugs on the lock side are not cosmetic:
+    escaped text that comes back as markup is live HTML in the viewer.
+    """
+
+    @pytest.mark.parametrize(
+        "inner",
+        [
+            # Escaped text must stay text (otherwise it becomes markup).
+            "a &lt;img src=x onerror=alert(1)&gt; b",
+            "<pre><code>&lt;script&gt;x &amp;&amp; y&lt;/script&gt;</code></pre>",
+            # Comments keep their delimiters.
+            "<!-- note --><p>x</p>",
+            # Head-only elements at the start of the fragment stay put.
+            "<style>.a{color:red}</style><p>x</p>",
+            '<meta content="b" name="a"/><script>var x = 1</script><p>x</p>',
+            '<link href="s.css" rel="stylesheet"/><p>x</p>',
+            # Leading text and table structure.
+            " lead <p>x</p>",
+            "<table><tbody><tr><td>a</td></tr></tbody></table>",
+        ],
+    )
+    def test_roundtrip_is_exact(self, inner):
+        html = f"<html><head></head><body><pagevault>{inner}</pagevault></body></html>"
+        expected = _region_inner(html)
+
+        result = unlock_html(lock_html(html, "pw"), "pw")
+
+        assert _region_inner(result) == expected
+
+    def test_locked_plaintext_keeps_entities(self):
+        """The fragment the browser receives is the escaped serialization."""
+        html = "<pagevault>1 &lt; 2 &amp; <!-- c --></pagevault>"
+        soup = BeautifulSoup(html, "html.parser")
+
+        assert (
+            extract_element_content(soup.find("pagevault"))
+            == "1 &lt; 2 &amp; <!-- c -->"
+        )
+
+
 class TestMultipleElements:
     """Tests for multiple pagevault elements."""
 
@@ -572,9 +615,14 @@ class TestMultipleElements:
         assert "First" not in result
         assert "Second" not in result
         # Count pagevault elements with data-pv-v4 attribute
-        assert len(BeautifulSoup(result, "html.parser").find_all(
-            "pagevault", attrs={"data-pv-v4": True}
-        )) == 2
+        assert (
+            len(
+                BeautifulSoup(result, "html.parser").find_all(
+                    "pagevault", attrs={"data-pv-v4": True}
+                )
+            )
+            == 2
+        )
         assert 'data-hint="hint1"' in result
         assert 'data-hint="hint2"' in result
 
@@ -614,9 +662,14 @@ class TestMultipleElements:
 
         # Both end up with v4 envelope in the output
         # Count pagevault elements with data-pv-v4 attribute
-        assert len(BeautifulSoup(result, "html.parser").find_all(
-            "pagevault", attrs={"data-pv-v4": True}
-        )) == 2
+        assert (
+            len(
+                BeautifulSoup(result, "html.parser").find_all(
+                    "pagevault", attrs={"data-pv-v4": True}
+                )
+            )
+            == 2
+        )
         assert "New content" not in result
         # The pre-existing envelope is PRESERVED: unlock should return
         # "Already encrypted" for the first region.
@@ -1203,9 +1256,11 @@ class TestSyncHtmlKeys:
 
         # Capture original envelope
         soup_orig = BeautifulSoup(encrypted, "html.parser")
-        orig_meta = soup_orig.find("pagevault").find(
-            "script", attrs={"data-pv-meta": True}
-        ).string
+        orig_meta = (
+            soup_orig.find("pagevault")
+            .find("script", attrs={"data-pv-meta": True})
+            .string
+        )
         orig_env = _json.loads(orig_meta)
 
         result = sync_html_keys(
@@ -1216,9 +1271,11 @@ class TestSyncHtmlKeys:
 
         # Envelope should differ (new CEK/IVs) even if password is the same
         soup_new = BeautifulSoup(result, "html.parser")
-        new_meta = soup_new.find("pagevault").find(
-            "script", attrs={"data-pv-meta": True}
-        ).string
+        new_meta = (
+            soup_new.find("pagevault")
+            .find("script", attrs={"data-pv-meta": True})
+            .string
+        )
         new_env = _json.loads(new_meta)
         assert new_env["iv_base"] != orig_env["iv_base"]
         assert new_env["meta_iv"] != orig_env["meta_iv"]
@@ -1272,9 +1329,7 @@ class TestAutoMetadata:
         # Extract envelope + chunks and decrypt to inspect meta
         soup = BeautifulSoup(result, "html.parser")
         elem = soup.find("pagevault")
-        envelope = _json.loads(
-            elem.find("script", attrs={"data-pv-meta": True}).string
-        )
+        envelope = _json.loads(elem.find("script", attrs={"data-pv-meta": True}).string)
         chunks = [
             c.string or ""
             for c in sorted(
@@ -1304,9 +1359,7 @@ class TestAutoMetadata:
         # The content hash should match the inner HTML hash
         soup = BeautifulSoup(result, "html.parser")
         elem = soup.find("pagevault")
-        envelope = _json.loads(
-            elem.find("script", attrs={"data-pv-meta": True}).string
-        )
+        envelope = _json.loads(elem.find("script", attrs={"data-pv-meta": True}).string)
         chunks = [
             c.string or ""
             for c in sorted(
@@ -1559,9 +1612,7 @@ class TestRegionPaddingByteLevel:
 
         chunks = [
             t.string
-            for t in soup.find("pagevault").find_all(
-                "script", {"data-pv-chunk": True}
-            )
+            for t in soup.find("pagevault").find_all("script", {"data-pv-chunk": True})
         ]
         _, meta = decrypt_v4(envelope, chunks, "pw")
         assert "size" in meta
@@ -1576,9 +1627,7 @@ class TestRegionPaddingByteLevel:
         regardless of whether padding was requested. Unlock uses it to
         slice deterministically.
         """
-        html = (
-            "<html><body><pagevault>plain content</pagevault></body></html>"
-        )
+        html = "<html><body><pagevault>plain content</pagevault></body></html>"
         locked = lock_html(html, password="pw")
         from pagevault.crypto import decrypt_v4
 
@@ -1590,9 +1639,7 @@ class TestRegionPaddingByteLevel:
         )
         chunks = [
             t.string
-            for t in soup.find("pagevault").find_all(
-                "script", {"data-pv-chunk": True}
-            )
+            for t in soup.find("pagevault").find_all("script", {"data-pv-chunk": True})
         ]
         _, meta = decrypt_v4(envelope, chunks, "pw")
         assert meta.get("size") == len("plain content".encode())
