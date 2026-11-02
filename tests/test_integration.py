@@ -139,9 +139,9 @@ class TestBrowserFeatures:
         html = "<pagevault>Secret</pagevault>"
         encrypted = lock_html(html, "password")
 
-        assert "localStorage" in encrypted
+        assert "indexedDB" in encrypted
         assert "sessionStorage" in encrypted
-        assert "getStoredCredentials" in encrypted
+        assert "recallKey" in encrypted
 
     def test_url_fragment_handling(self):
         """Test JS includes logout fragment handling (pwd removed for security)."""
@@ -159,8 +159,8 @@ class TestBrowserFeatures:
         config = PagevaultConfig()
         encrypted = lock_html(html, "password", config)
 
-        assert "storeCredentials" in encrypted
-        assert "clearStoredPasswords" in encrypted
+        assert "rememberKey" in encrypted
+        assert "forgetAllKeys" in encrypted
         assert "rememberDays" in encrypted
 
     def test_decryption_event_dispatched(self):

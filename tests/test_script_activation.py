@@ -228,7 +228,7 @@ class TestCustomEventTiming:
         js = _get_runtime_js()
         # In _decrypt: dispatch 'pagevault:decrypted', THEN append to
         # __pvActivationChain. Verify the source ordering inside _decrypt.
-        decrypt_method_pos = js.index("async _decrypt(password, username)")
+        decrypt_method_pos = js.index("async _decrypt(wrappingKey)")
         decrypted_event_in_decrypt = js.index("pagevault:decrypted", decrypt_method_pos)
         chain_append_pos = js.index("__pvActivationChain = __pvActivationChain.then")
         assert decrypted_event_in_decrypt < chain_append_pos

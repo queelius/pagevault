@@ -220,6 +220,37 @@ pagevault includes a viewer plugin system for rendering wrapped files (images, P
 
 **Recommendation:** Only install viewer plugins from packages you trust. Review third-party plugin source code before installing. The built-in viewers (image, PDF, HTML, text, Markdown) are maintained as part of the pagevault project and undergo the same review process as the core code.
 
+## Remembered Passwords
+
+When a visitor ticks "Remember on this device" (or the page uses
+`remember: "local"` / `"session"`), the browser keeps the key the password
+derives (PBKDF2 over the password and the envelope's salt), never the
+password:
+
+- `local`: an IndexedDB entry holding a **non-extractable** `CryptoKey`.
+  Scripts on the page's origin can use it to open pagevault pages, but can't
+  read its bytes, so it can't be copied off the device. It expires after
+  `remember_days` (0 = never).
+- `session`: `sessionStorage` holds only strings, so it keeps the key's
+  bytes, until the tab closes.
+
+Either way the key opens only pages locked with that password and that salt;
+a password reused elsewhere is not exposed. Every region of a page shares one
+salt, and pages locked with a config that sets `salt` (as `pagevault config
+init` does) share it too, so one "remember" covers them all; pages locked
+without a configured salt are remembered one page at a time. Anyone with access to the browser
+profile can still open those pages while the key lasts, which is what
+remembering means. `#pagevault_logout` forgets every key for the site.
+
+pagevault 0.4.2 and earlier stored the plaintext password in `localStorage`
+or `sessionStorage`; newer pages delete that entry when they load.
+
+## Config File Permissions
+
+`.pagevault.yaml` and the global config hold passwords. pagevault writes them
+mode 600 (owner only) and creates the global config directory mode 700;
+`pagevault audit` reports a config file other users can read.
+
 ## Content Padding
 
 The `--pad` flag (or `pad: true` in config) pads content to the next power-of-2 boundary before encryption. This prevents attackers from inferring content size from ciphertext length, which can be a concern when:

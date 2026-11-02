@@ -1,5 +1,7 @@
 """Tests for pagevault.parser module."""
 
+import json
+
 import pytest
 from bs4 import BeautifulSoup
 
@@ -1707,3 +1709,42 @@ class TestRegionPaddingByteLevel:
 
         unlocked = unlock_html(html, password="pw")
         assert "legacy content" in unlocked
+
+
+class TestDocumentSalt:
+    """Every region of a document shares one salt, so that one remembered
+    key (derived from password + salt) reopens all of them."""
+
+    TWO_REGIONS = "<p><pagevault>A</pagevault><pagevault>B</pagevault></p>"
+
+    @staticmethod
+    def _salts(html):
+        soup = BeautifulSoup(html, "html.parser")
+        return [
+            json.loads(s.string)["salt"] for s in soup.select("script[data-pv-meta]")
+        ]
+
+    def test_lock_without_salt_shares_one_fresh_salt(self):
+        first = self._salts(lock_html(self.TWO_REGIONS, password="pw"))
+        again = self._salts(lock_html(self.TWO_REGIONS, password="pw"))
+
+        assert len(first) == 2 and len(set(first)) == 1
+        assert first != again
+
+    def test_sync_keeps_the_given_salt(self):
+        salt = generate_salt()
+        locked = lock_html(self.TWO_REGIONS, password="pw", salt=salt)
+
+        synced = sync_html_keys(
+            locked, old_password="pw", new_password="pw2", salt=salt
+        )
+
+        assert self._salts(synced) == [salt.hex(), salt.hex()]
+        assert "A" in unlock_html(synced, "pw2")
+
+    def test_sync_without_salt_shares_one_fresh_salt(self):
+        locked = lock_html(self.TWO_REGIONS, password="pw")
+
+        salts = self._salts(sync_html_keys(locked, "pw", new_password="pw"))
+
+        assert len(set(salts)) == 1

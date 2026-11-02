@@ -29,7 +29,7 @@ Mark sections with `<pagevault>` tags. pagevault encrypts just those sections wh
 <footer>Public footer</footer>
 ```
 
-Visitors see your site normally. When they encounter protected content, a password prompt appears. Once unlocked, the content displays beautifully. Password can be remembered in browser (configurable).
+Visitors see your site normally. When they encounter protected content, a password prompt appears. Once unlocked, the content displays beautifully. The browser can remember an unlocked page (configurable), without storing the password.
 
 ## Why pagevault?
 
@@ -115,8 +115,8 @@ pagevault lock status-page.html -p "$CLIENT_PASSWORD"
 
 ### For Users
 - **Auto-prompt**: Password prompt appears automatically (optional)
-- **Remember-me**: Store password in browser (session or persistent)
-- **Clean logout**: `#pagevault_logout` clears stored passwords
+- **Remember-me**: Reopen pages without a prompt (per tab or per device); stores a non-extractable key, never the password
+- **Clean logout**: `#pagevault_logout` forgets remembered keys
 - **Event hooks**: JavaScript can react to decryption
 
 ### For Developers

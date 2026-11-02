@@ -62,3 +62,42 @@ def test_existing_file_keeps_its_mode(tmp_path):
     atomic_write(target, "y")
 
     assert _mode(target) == 0o640
+
+
+def test_explicit_mode_overrides_existing(tmp_path):
+    target = tmp_path / "secret.yaml"
+    target.write_text("old")
+    target.chmod(0o644)
+
+    atomic_write(target, "new", mode=0o600)
+
+    assert target.read_text() == "new"
+    assert _mode(target) == 0o600
+
+
+def test_replaces_a_symlink_rather_than_writing_through_it(tmp_path):
+    victim = tmp_path / "elsewhere.txt"
+    victim.write_text("untouched")
+    link = tmp_path / "out" / "page.html"
+    link.parent.mkdir()
+    link.symlink_to(victim)
+
+    atomic_write(link, "output")
+
+    assert not link.is_symlink()
+    assert link.read_text() == "output"
+    assert victim.read_text() == "untouched"
+
+
+def test_follow_symlinks_writes_through(tmp_path):
+    target = tmp_path / "dotfiles" / "pagevault.yaml"
+    target.parent.mkdir()
+    target.write_text("old")
+    link = tmp_path / ".pagevault.yaml"
+    link.symlink_to(target)
+
+    atomic_write(link, "new", mode=0o600, follow_symlinks=True)
+
+    assert link.is_symlink()
+    assert target.read_text() == "new"
+    assert _mode(target) == 0o600

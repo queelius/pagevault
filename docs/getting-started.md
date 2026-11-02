@@ -254,7 +254,7 @@ pagevault lock example.html
 ## Configuration Options
 
 See [Configuration](configuration.md) for all options:
-- `remember`: How long to store passwords (session/local/never)
+- `remember`: Whether the browser remembers an unlocked page (none/session/local/ask)
 - `auto_prompt`: Whether to show password prompt automatically
 - `title`: Label for encrypted sections
 - `users`: Multi-user encryption

@@ -30,16 +30,17 @@ def test_build_region_js_contains_decrypt_v4():
     assert "decryptV4" in js
 
 
-def test_build_region_js_contains_storage_key():
-    """build_region_js output must include STORAGE_KEY constant."""
+def test_build_region_js_contains_key_storage():
+    """build_region_js output must include the remembered-key store."""
     js = build_region_js()
-    assert "STORAGE_KEY" in js
+    assert "rememberKey" in js and "recallKey" in js
 
 
-def test_build_region_js_contains_store_credentials():
-    """build_region_js output must include storeCredentials function."""
+def test_build_region_js_never_stores_passwords():
+    """The legacy plaintext password store is only ever removed."""
     js = build_region_js()
-    assert "storeCredentials" in js
+    assert "storeCredentials" not in js
+    assert "setItem(LEGACY_PASSWORDS" not in js
 
 
 def test_build_region_js_contains_activation():

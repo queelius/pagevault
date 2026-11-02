@@ -1,5 +1,6 @@
 """Tests for pagevault.cli module."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -1734,6 +1735,27 @@ managed:
         assert result.exit_code == 0
 
 
+class TestSyncKeepsConfigSalt:
+    def test_sync_reencrypts_under_the_config_salt(self, runner, tmp_path):
+        """Remembered keys are per salt: sync must not scatter new ones."""
+        salt = "0123456789abcdef0123456789abcdef"
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text(f'salt: "{salt}"\nusers:\n  alice: "pw-alice"\n')
+        page = tmp_path / "page.html"
+        page.write_text("<p><pagevault>A</pagevault><pagevault>B</pagevault></p>")
+        out = tmp_path / "out"
+        runner.invoke(main, ["lock", str(page), "-c", str(config_path), "-d", str(out)])
+        locked = out / "page.html"
+        before = locked.read_text()
+
+        result = runner.invoke(main, ["sync", str(locked), "-c", str(config_path)])
+
+        assert result.exit_code == 0, result.output
+        after = locked.read_text()
+        assert after != before
+        assert after.count(f'"salt": "{salt}"') == 2
+
+
 class TestConfigUserAdd:
     """Tests for config user add command."""
 
@@ -2962,6 +2984,22 @@ users:
 
         assert "bob" in result.output
         assert "WEAK" in result.output
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only")
+    def test_audit_flags_config_readable_by_others(self, runner, tmp_path):
+        config_path = tmp_path / CONFIG_FILENAME
+        config_path.write_text('password: "very-strong-passphrase-2024!"\n')
+        (tmp_path / ".gitignore").write_text(".pagevault.yaml\n")
+
+        config_path.chmod(0o644)
+        result = runner.invoke(main, ["audit", "-c", str(config_path)])
+        assert result.exit_code == 1
+        assert "readable by other users (mode 644)" in result.output
+
+        config_path.chmod(0o600)
+        result = runner.invoke(main, ["audit", "-c", str(config_path)])
+        assert "readable by other users" not in result.output
+        assert "private to its owner" in result.output
 
 
 class TestUnlockStdout:

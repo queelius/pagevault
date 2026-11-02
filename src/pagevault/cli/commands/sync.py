@@ -98,7 +98,10 @@ def sync(paths, recursive, config_path, dry_run):
                 result = doc.rekey(old_users=config.users, new_users=config.users)
             else:
                 result = sync_html_keys(
-                    content, old_users=config.users, new_users=config.users
+                    content,
+                    old_users=config.users,
+                    new_users=config.users,
+                    salt=config.salt,
                 )
 
             if result != content:
